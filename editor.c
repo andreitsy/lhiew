@@ -13,20 +13,28 @@ size_t get_row_len(void) {
 }
 
 void switch_mode(void) {
-    size_t current_byte = global_cfg.cy*global_cfg.cur_screencols + global_cfg.cx;
-    if (global_cfg.mode == HEX_MODE) {
-        global_cfg.cur_screencols = HEX_BYTE_LENGTH;
-    } else {
-        global_cfg.cur_screencols = global_cfg.screencols;
+    switch (global_cfg.mode) {
+        case TEXT_MODE:
+            global_cfg.cur_screencols = global_cfg.screencols;
+            break;
+        case HEX_MODE:
+            global_cfg.cur_screencols = HEX_BYTE_LENGTH;
+            break;
+        case DISSASEMBLER_MODE:
+            global_cfg.cur_screencols = global_cfg.screencols;
+            break;
     }
-    global_cfg.cy = current_byte / global_cfg.cur_screencols;
-    global_cfg.cx = current_byte % global_cfg.cur_screencols;
+    global_cfg.cy = global_cfg.cur_byte / global_cfg.cur_screencols;
+    global_cfg.cx = global_cfg.cur_byte % global_cfg.cur_screencols;
     global_cfg.numrows = global_cfg.num_bytes / global_cfg.cur_screencols + 1;
 }
 
 void disable_raw_mode(void) {
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &global_cfg.orig_termios) == -1)
         die_safely("tcsetattr");
+    if (global_cfg.mode == DISSASEMBLER_MODE) {
+        printf("\x1b[?25h"); // make cursor visible
+    }
     fclose(global_cfg.fp);
 }
 
@@ -164,7 +172,7 @@ void free_append_buffer(append_buffer *ab) {
 }
 
 void free_dissasembled_buffer(void) {
-    free(global_cfg.dissasembled_buffer);
+    free(global_cfg.dissasembler_buffer);
 }
 
 void init_editor(void) {
@@ -174,6 +182,7 @@ void init_editor(void) {
     global_cfg.cy = 0;
     global_cfg.rx = 0;
     global_cfg.num_bytes = 0;
+    global_cfg.cur_byte = 0;
     global_cfg.numrows = 0;
     global_cfg.rowoff = 0;
     global_cfg.filename = NULL;
@@ -189,10 +198,12 @@ void init_editor(void) {
         die_safely("Terminal is too short, "
                    "please expand for at least 80 columns!");
     }
+    // useful for debug
+    //global_cfg.screenrows = 127;
     if (global_cfg.screenrows >= 2)
         global_cfg.screenrows -= 2;
     global_cfg.cur_screencols = SCREENCOLS_MIN;
     global_cfg.screencols = global_cfg.cur_screencols;
-    global_cfg.dissasembled_buffer = malloc(global_cfg.screenrows * DISSASMBLED_BUFFER_SIZE);
+    global_cfg.dissasembler_buffer = malloc(global_cfg.screenrows * sizeof(dissasemblerRow));
     atexit(free_dissasembled_buffer);
 }

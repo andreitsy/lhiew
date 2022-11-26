@@ -7,52 +7,98 @@ void editor_move_cursor(int key) {
         row.chars = NULL;
     } else {
         row.size = get_row_len();
-        row.chars = (char*)&global_cfg.file[global_cfg.cy*global_cfg.cur_screencols];
+        row.chars = (char *) &global_cfg.file[global_cfg.cy * global_cfg.cur_screencols];
     }
 
-    switch (key) {
-        case ARROW_LEFT:
-        case 'h':
-            if (global_cfg.cx > 0) {
-                global_cfg.cx--;
-            } else if (global_cfg.cy > 0) {
-                global_cfg.cy--;
-                size_t rowlen = get_row_len();
-                global_cfg.cx = rowlen - 1;
+    if (global_cfg.mode == DISSASEMBLER_MODE) {
+        size_t cur_row;
+        for(cur_row = 0; cur_row < global_cfg.screenrows;++cur_row) {
+            if (global_cfg.dissasembler_buffer[cur_row].start_byte <= global_cfg.cur_byte
+                && global_cfg.cur_byte < global_cfg.dissasembler_buffer[cur_row].end_byte) {
+                break;
             }
-            break;
-        case ARROW_RIGHT:
-        case 'l':
-            if (row.chars && global_cfg.cx < row.size - 1) {
-                global_cfg.cx++;
-            } else if (row.chars && global_cfg.cx == row.size - 1) {
-                global_cfg.cy++;
-                global_cfg.cx = 0;
-            }
-            break;
-        case ARROW_UP:
-        case 'k':
-            if (global_cfg.cy != 0) {
-                global_cfg.cy--;
-            }
-            break;
-        case ARROW_DOWN:
-        case 'j':
-            if (global_cfg.cy < global_cfg.numrows) {
-                global_cfg.cy++;
-            }
-            break;
+        }
+        size_t shift = global_cfg.cur_byte - global_cfg.dissasembler_buffer[cur_row].start_byte;
+        switch (key) {
+            case ARROW_LEFT:
+            case 'h':
+                if (global_cfg.cur_byte)
+                    global_cfg.cur_byte--;
+                break;
+            case ARROW_RIGHT:
+            case 'l':
+                if (global_cfg.cur_byte < global_cfg.num_bytes)
+                    global_cfg.cur_byte++;
+                break;
+            case ARROW_UP:
+            case 'k':
+                if (global_cfg.cur_byte > shift + 1)
+                    global_cfg.cur_byte -= (shift + 1);
+                break;
+            case ARROW_DOWN:
+            case 'j':
+                if (cur_row < global_cfg.screenrows - 1) {
+                    size_t tmp_start = global_cfg.dissasembler_buffer[cur_row+1].start_byte;
+                    size_t tmp_end = global_cfg.dissasembler_buffer[cur_row+1].end_byte;
+                    if (tmp_start + shift < tmp_end) {
+                        global_cfg.cur_byte = tmp_start + shift;
+                    } else {
+                        global_cfg.cur_byte = tmp_end - 1;
+                    }
+                }
+                break;
+        }
+        size_t rowlen = get_row_len();
+        if (global_cfg.cx > rowlen) {
+            global_cfg.cx = rowlen - 1;
+        }
+        global_cfg.cy = global_cfg.cur_byte / global_cfg.cur_screencols;
+        global_cfg.cx = global_cfg.cur_byte % global_cfg.cur_screencols;
+    } else {
+        switch (key) {
+            case ARROW_LEFT:
+            case 'h':
+                if (global_cfg.cx > 0) {
+                    global_cfg.cx--;
+                } else if (global_cfg.cy > 0) {
+                    global_cfg.cy--;
+                    global_cfg.cx = row.size - 1;
+                }
+                break;
+            case ARROW_RIGHT:
+            case 'l':
+                if (row.chars && global_cfg.cx < row.size - 1) {
+                    global_cfg.cx++;
+                } else if (row.chars && global_cfg.cx == row.size - 1) {
+                    global_cfg.cy++;
+                    global_cfg.cx = 0;
+                }
+                break;
+            case ARROW_UP:
+            case 'k':
+                if (global_cfg.cy != 0) {
+                    global_cfg.cy--;
+                }
+                break;
+            case ARROW_DOWN:
+            case 'j':
+                if (global_cfg.cy < global_cfg.numrows) {
+                    global_cfg.cy++;
+                }
+                break;
+        }
+        size_t rowlen = get_row_len();
+        if (global_cfg.cx > rowlen) {
+            global_cfg.cx = rowlen - 1;
+        }
+        global_cfg.cur_byte = global_cfg.cy * global_cfg.cur_screencols + global_cfg.cx;
     }
 
-    size_t rowlen = get_row_len();
-    if (global_cfg.cx > rowlen) {
-        global_cfg.cx = rowlen - 1;
-    }
 }
 
 void editor_process_keypress(void) {
     int c = editor_read_key();
-    switch(c) {
+    switch (c) {
         case CTRL_KEY('m'):
             global_cfg.mode = global_cfg.mode == 0 ? DISSASEMBLER_MODE : global_cfg.mode - 1;
             switch_mode();

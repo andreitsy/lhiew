@@ -6,6 +6,6 @@
 #include <Zycore/LibC.h>
 #include <Zydis/Zydis.h>
 
-int dissameble_block(size_t read_offset_base, size_t buffer_size);
+int dissameble_block(size_t cur_byte);
 
 #endif //LHIEW_DISSASEMBLER_H

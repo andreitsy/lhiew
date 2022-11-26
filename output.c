@@ -43,11 +43,11 @@ void draw_row_hex(size_t y, append_buffer *ab) {
         str_tmp = (char *) malloc(5 * sizeof(char));
         snprintf(str_tmp, 4, "%02x", b[j]);
         if (cursor_pos) {
-            append_to_buffer(ab, "\x1b[7m", 4);
+            append_to_buffer(ab, "\x1b[7m", 4); // highlight current byte
         }
         append_to_buffer(ab, str_tmp, 3);
         if (cursor_pos) {
-            append_to_buffer(ab, "\x1b[m", 3);
+            append_to_buffer(ab, "\x1b[m", 3); // highlight current byte
         }
         free(str_tmp);
     }
@@ -58,13 +58,35 @@ void draw_row_hex(size_t y, append_buffer *ab) {
 }
 
 void draw_row_dissasembler(size_t y, append_buffer *ab) {
-    size_t dissasembler_len = strlen(global_cfg.dissasembled_buffer[y]);
-    append_to_buffer(ab, global_cfg.dissasembled_buffer[y],
+    size_t dissasembler_len = strlen(global_cfg.dissasembler_buffer[y].diss_str);
+    size_t padding = global_cfg.cur_screencols;
+    size_t start = global_cfg.dissasembler_buffer[y].start_byte;
+    char buf[12] = "";
+    padding -= sprintf(buf, "%09zx| ", start);
+    append_to_buffer(ab, buf, 12);
+    for (size_t i = start; i < start + 16; i++)
+    {
+        if (i == global_cfg.cur_byte) {
+            append_to_buffer(ab, "\x1b[7m", 4); // highlight current byte
+        }
+        if (i < global_cfg.dissasembler_buffer[y].end_byte) {
+            sprintf(buf, "%02x", global_cfg.file[i]);
+            append_to_buffer(ab, buf, 2);
+        } else {
+            append_to_buffer(ab, "  ", 2);
+        }
+        if (i == global_cfg.cur_byte) {
+            append_to_buffer(ab, "\x1b[m", 3); // highlight current byte
+        }
+        padding -= 2;
+    }
+    append_to_buffer(ab, "| ", 2);
+    padding -= 2;
+    append_to_buffer(ab, global_cfg.dissasembler_buffer[y].diss_str,
                      dissasembler_len);
-    size_t padding = global_cfg.cur_screencols - dissasembler_len;
-    while (padding) {
+    padding -= dissasembler_len;
+    while (padding--) {
         append_to_buffer(ab, " ", 1);
-        padding--;
     }
 }
 
@@ -112,7 +134,7 @@ void editor_draw_rows(append_buffer *ab) {
             }
             break;
         case DISSASEMBLER_MODE:
-            dissameble_block(global_cfg.rowoff + global_cfg.rx, 2*global_cfg.screenrows);
+            dissameble_block(global_cfg.cur_byte);
             for (y = 0; y < global_cfg.screenrows; y++) {
                 draw_row_dissasembler(y, ab);
                 append_to_buffer(ab, "\r\n", 2);
@@ -154,13 +176,22 @@ void editor_draw_status_bar(append_buffer *ab) {
             dissambler_mode_str = "Long 64 opsize";
             break;
     }
-    size_t rlen = snprintf(rstatus, sizeof(rstatus), "%s (%s) %zu:%zu - %lu/%zu",
-                           format_str,
-                           dissambler_mode_str,
-                           get_byte_position(),
-                           global_cfg.num_bytes,
-                           global_cfg.cy + 1,
-                           global_cfg.numrows);
+    size_t rlen;
+    if (global_cfg.mode == DISSASEMBLER_MODE) {
+        rlen = snprintf(rstatus, sizeof(rstatus), "%s (%s) %zu:%zu",
+                        format_str,
+                        dissambler_mode_str,
+                        get_byte_position(),
+                        global_cfg.num_bytes);
+    } else {
+        rlen = snprintf(rstatus, sizeof(rstatus), "%s %zu:%zu - %lu/%zu",
+                        format_str,
+                        get_byte_position(),
+                        global_cfg.num_bytes,
+                        global_cfg.cy + 1,
+                        global_cfg.numrows);
+    }
+
     if (len > global_cfg.screencols)
         len = global_cfg.screencols;
     append_to_buffer(ab, status, len);
@@ -226,7 +257,9 @@ void editor_refresh_screen(void) {
              (global_cfg.cy - global_cfg.rowoff) + 1,
              (global_cfg.rx - global_cfg.coloff) + 1);
     append_to_buffer(&ab, buf, strlen(buf));
-    append_to_buffer(&ab, "\x1b[?25h", 6); // make cursor visible
+    if (global_cfg.mode != DISSASEMBLER_MODE) {
+        append_to_buffer(&ab, "\x1b[?25h", 6); // make cursor visible
+    }
     write(STDOUT_FILENO, ab.buffer, ab.len);
     free_append_buffer(&ab);
 }

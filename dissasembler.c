@@ -1,7 +1,8 @@
 #include "dissasembler.h"
+#include <stdbool.h>
+#define MAX_OP_SIZE 128
 
-
-int dissameble_block(size_t read_offset_base, size_t buffer_size) {
+int dissameble_block(size_t cur_byte) {
     ZydisDecoder decoder;
     if (global_cfg.dissasembler_mode == REAL) {
         ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_REAL_16, ZYDIS_STACK_WIDTH_16);
@@ -16,21 +17,44 @@ int dissameble_block(size_t read_offset_base, size_t buffer_size) {
         return EXIT_FAILURE;
     }
 
-
     ZydisFormatter formatter;
-    if (!ZYAN_SUCCESS(ZydisFormatterInit(&formatter, ZYDIS_FORMATTER_STYLE_INTEL)) ||
+    if (!ZYAN_SUCCESS(ZydisFormatterInit(&formatter, ZYDIS_FORMATTER_STYLE_ATT)) ||
         !ZYAN_SUCCESS(ZydisFormatterSetProperty(&formatter,
-                                                ZYDIS_FORMATTER_PROP_FORCE_SEGMENT, ZYAN_TRUE)) ||
+                                                ZYDIS_FORMATTER_PROP_FORCE_SEGMENT, ZYAN_FALSE)) ||
         !ZYAN_SUCCESS(ZydisFormatterSetProperty(&formatter,
-                                                ZYDIS_FORMATTER_PROP_FORCE_SIZE, ZYAN_TRUE))) {
+                                                ZYDIS_FORMATTER_PROP_FORCE_SIZE, ZYAN_FALSE))) {
         die_safely("Failed to initialized instruction-formatter\n");
         return EXIT_FAILURE;
     }
 
+    size_t buffer_size = global_cfg.screenrows * MAX_OP_SIZE;
     ZyanUSize buffer_remaining = 0;
     uint8_t buffer_block[buffer_size];
+    size_t read_offset_base = 0;
+    if (cur_byte) {
+        for(size_t row; row < global_cfg.screenrows;++row) {
+            if (global_cfg.dissasembler_buffer[row].start_byte <= cur_byte
+                && cur_byte < global_cfg.dissasembler_buffer[row].end_byte) {
+                read_offset_base = global_cfg.dissasembler_buffer[row].start_byte;
+                break;
+            }
+        }
+        if (read_offset_base == 0) {
+            read_offset_base = cur_byte;
+            if (read_offset_base > MAX_OP_SIZE) {
+                read_offset_base -= MAX_OP_SIZE;
+            } else {
+                read_offset_base = 0;
+            }
+        }
+    }
+
+    if (read_offset_base + buffer_size > global_cfg.num_bytes) {
+        buffer_size = global_cfg.num_bytes - read_offset_base - buffer_size;
+    }
     memcpy(buffer_block, &global_cfg.file[read_offset_base], buffer_size);
     size_t output_row = 0;
+    bool runtime_after_cur_byte = false;
     do {
         ZydisDecodedInstruction instruction;
         ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
@@ -39,31 +63,21 @@ int dissameble_block(size_t read_offset_base, size_t buffer_size) {
         while ((status = ZydisDecoderDecodeFull(
                 &decoder, buffer_block + read_offset,
                 buffer_size - read_offset,
-                &instruction, operands)) != ZYDIS_STATUS_NO_MORE_DATA
-                && output_row < global_cfg.screenrows) {
+                &instruction, operands)) != ZYDIS_STATUS_NO_MORE_DATA &&
+               output_row < global_cfg.screenrows) {
             const ZyanU64 runtime_address = read_offset_base + read_offset;
             char format_buffer[DISSASMBLED_BUFFER_SIZE];
 
-            char buf_code[128] = "";
-            char* buf = buf_code;
-            char* end_of_buf = buf + sizeof(buf_code);
-            for (size_t i = 0; i < instruction.length; i++)
-            {
-                if (buf_code + 3 < end_of_buf)
-                {
-                    buf += sprintf(buf, "%02x",
-                                   buffer_block[runtime_address + i - read_offset_base]);
-                }
-            }
-
             if (!ZYAN_SUCCESS(status)) {
-                sprintf(global_cfg.dissasembled_buffer[output_row],
-                        "%08lx| %-20s | db %02X",
-                        runtime_address, buf_code,
-                        buffer_block[read_offset++]);
-//                sprintf(global_cfg.dissasembled_buffer[output_row++],
-//                        "db %02X",
-//                        buffer_block[read_offset++]);
+                if (runtime_after_cur_byte || (runtime_address >= cur_byte)) {
+                    global_cfg.dissasembler_buffer[output_row].start_byte = runtime_address;
+                    global_cfg.dissasembler_buffer[output_row].end_byte = runtime_address + 1;
+                    sprintf(global_cfg.dissasembler_buffer[output_row].diss_str,
+                            "db %02X", buffer_block[read_offset]);
+                    output_row++;
+                    runtime_after_cur_byte = true;
+                }
+                read_offset++;
                 continue;
             }
 
@@ -71,12 +85,15 @@ int dissameble_block(size_t read_offset_base, size_t buffer_size) {
                                             instruction.operand_count_visible,
                                             format_buffer, sizeof(format_buffer),
                                             runtime_address, ZYAN_NULL);
-            sprintf(global_cfg.dissasembled_buffer[output_row],
-                    "%08lx |  %-20s | %s", runtime_address, buf_code,
-                    format_buffer);
-            //strcpy(global_cfg.dissasembled_buffer[output_row], format_buffer);
+            if (runtime_after_cur_byte
+                || (runtime_address >= cur_byte || cur_byte < runtime_address + instruction.length)) {
+                global_cfg.dissasembler_buffer[output_row].start_byte = runtime_address;
+                global_cfg.dissasembler_buffer[output_row].end_byte = runtime_address + instruction.length;
+                strcpy(global_cfg.dissasembler_buffer[output_row].diss_str, format_buffer);
+                output_row++;
+                runtime_after_cur_byte = true;
+            }
             read_offset += instruction.length;
-            output_row++;
         }
 
         buffer_remaining = 0;
@@ -85,8 +102,8 @@ int dissameble_block(size_t read_offset_base, size_t buffer_size) {
             memmove(buffer_block, buffer_block + read_offset, buffer_remaining);
         }
         read_offset_base += read_offset;
-
-    } while (read_offset_base <= buffer_size && output_row < global_cfg.screenrows);
+    } while (read_offset_base <= buffer_size &&
+             output_row < global_cfg.screenrows);
 
     return EXIT_SUCCESS;
 }
