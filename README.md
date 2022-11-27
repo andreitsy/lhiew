@@ -29,7 +29,7 @@ Linux clone of [hiew editor](https://www.hiew.ru/) which can view binary files i
 ---
 
 ## About
-**LHiew** is a console hex editor for Linux clone of well-know editor Hiew. Amongst its feature set is its ability to view files in text, hex and disassembly mode in which A&T syntax is used.
+**LHiew** is a console editor, Linux clone of well-know editor Hiew. Amongst its feature set is its ability to view files in text, hex and disassembly mode in which A&T syntax is used.
 
 
 ## Getting Started
