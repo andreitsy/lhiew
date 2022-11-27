@@ -1,6 +1,6 @@
 # LHiew
 
-Linux clone of [hiew editor](https://www.hiew.ru/) which to view binary files in raw, hex or dissasembly mode.
+Linux clone of [hiew editor](https://www.hiew.ru/) which can view binary files in raw, hex or dissasembly mode.
 
 
 [![license](https://img.shields.io/github/license/dec0dOS/amazing-github-template.svg?style=flat-square)](LICENSE)
