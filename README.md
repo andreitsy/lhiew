@@ -72,7 +72,7 @@ Supported assembly operator size are:
 
 ##### Requirments
 1. CMake 3.0 or higher
-2. Compillar which supports C11
+2. compiler that supports C11
 
 ##### Compilling from source
 
