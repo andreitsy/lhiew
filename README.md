@@ -71,7 +71,7 @@ Supported assembly operator size are:
 #### Installing
 
 ##### Requirments
-1. CMake 3.23 or higher
+1. CMake 3.0 or higher
 2. Compillar which supports C11
 
 ##### Compilling from source
