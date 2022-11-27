@@ -1,2 +1,78 @@
-# lhiew
-Linux clone of hiew editor
+# LHiew
+
+Linux clone of [hiew editor](https://www.hiew.ru/).
+
+
+[![license](https://img.shields.io/github/license/dec0dOS/amazing-github-template.svg?style=flat-square)](LICENSE)
+
+</div>
+
+<details open="open">
+<summary>Table of Contents</summary>
+
+- [About](#about)
+    - [Built With](#built-with)
+- [Getting Started](#getting-started)
+    - [Prerequisites](#prerequisites)
+    - [Usage](#usage)
+        - [Cookiecutter template](#cookiecutter-template)
+        - [Manual setup](#manual-setup)
+        - [Variables reference](#variables-reference)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [Support](#support)
+- [License](#license)
+- [Acknowledgements](#acknowledgements)
+
+</details>
+
+---
+
+## About
+**LHiew** is a console hex editor for Linux clone of well-know editor Hiew. Amongst its feature set is its ability to view files in text, hex and disassembly mode in which A&T syntax is used.
+
+
+## Getting Started
+
+### Usage
+
+#### Open file
+
+```sh
+lhiew ./a.out
+```
+
+You will get an interactive prompt.
+
+#### Keybindings
+
+
+
+#### Installing
+
+##### Compilling from source
+
+Please follow these steps for manual setup:
+
+1. [Clone the code](https://github.com/dec0dOS/amazing-github-template/releases/download/latest/) using `git clone --recursive git@github.com:andreitsy/lhiew.git`
+2. Create directory with build `cd lhiew && mkdir build;`
+3. Run `cd lhiew/build && cmake ..`
+4. Run `make`
+
+##### Downloading
+
+Simply download precompilled binary lhiew.
+
+## License
+
+This project is licensed under the **MIT license**. Feel free to edit and distribute this template as you like.
+
+See [LICENSE](LICENSE) for more information.
+
+## Acknowledgements
+
+Thanks for this awesome resources that were used during the development:
+
+- https://viewsourcecode.org/snaptoken/kilo/
+- https://www.hiew.ru/
+- https://github.com/zyantific/zydis

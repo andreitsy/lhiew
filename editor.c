@@ -194,12 +194,6 @@ void init_editor(void) {
                         &global_cfg.cur_screencols) == -1) {
         die_safely("getWindowSize");
     }
-    if (global_cfg.cur_screencols < SCREENCOLS_MIN) {
-        die_safely("Terminal is too short, "
-                   "please expand for at least 80 columns!");
-    }
-    // useful for debug
-    //global_cfg.screenrows = 127;
     if (global_cfg.screenrows >= 2)
         global_cfg.screenrows -= 2;
     global_cfg.cur_screencols = SCREENCOLS_MIN;

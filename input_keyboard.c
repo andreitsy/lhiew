@@ -120,6 +120,9 @@ void editor_process_keypress(void) {
             break;
         case PAGE_UP:
         case PAGE_DOWN: {
+            if (global_cfg.mode == DISSASEMBLER_MODE) {
+                break;
+            }
             if (c == PAGE_UP) {
                 global_cfg.cy = global_cfg.rowoff;
             } else { // c == PAGE_DOWN
