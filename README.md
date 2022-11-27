@@ -70,13 +70,17 @@ Supported assembly operator size are:
 
 #### Installing
 
+##### Requirments
+1. CMake 3.23 or higher
+2. Compillar which supports C11
+
 ##### Compilling from source
 
 Please follow these steps for manual setup:
 
 1. [Clone the code](https://github.com/dec0dOS/amazing-github-template/releases/download/latest/) using `git clone --recursive git@github.com:andreitsy/lhiew.git`
-2. Create directory with build `cd lhiew && mkdir build;`
-3. Run `cd lhiew/build && cmake ..`
+2. Create directory with build `cd lhiew && mkdir build`
+3. Run `cd build && cmake ..`
 4. Run `make`
 
 ##### Downloading
