@@ -134,7 +134,9 @@ void editor_draw_rows(append_buffer *ab) {
             }
             break;
         case DISSASEMBLER_MODE:
-            dissameble_block(global_cfg.cur_byte);
+            if (global_cfg.filename != NULL) {
+                dissameble_block(global_cfg.cur_byte);
+            }
             for (y = 0; y < global_cfg.screenrows; y++) {
                 draw_row_dissasembler(y, ab);
                 append_to_buffer(ab, "\r\n", 2);

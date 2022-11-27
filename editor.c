@@ -8,8 +8,11 @@ void die_safely(const char *s) {
 }
 
 size_t get_row_len(void) {
-    size_t tmp_len = global_cfg.num_bytes - global_cfg.cy*global_cfg.cur_screencols;
-    return tmp_len < global_cfg.cur_screencols ? tmp_len : global_cfg.cur_screencols;
+    if (global_cfg.num_bytes) {
+        size_t tmp_len = global_cfg.num_bytes - global_cfg.cy*global_cfg.cur_screencols;
+        return tmp_len < global_cfg.cur_screencols ? tmp_len : global_cfg.cur_screencols;
+    }
+    return 0;
 }
 
 void switch_mode(void) {
@@ -35,7 +38,8 @@ void disable_raw_mode(void) {
     if (global_cfg.mode == DISSASEMBLER_MODE) {
         printf("\x1b[?25h"); // make cursor visible
     }
-    fclose(global_cfg.fp);
+    if (global_cfg.fp != NULL)
+        fclose(global_cfg.fp);
 }
 
 void enable_raw_mode(void) {
