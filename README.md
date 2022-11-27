@@ -62,7 +62,7 @@ lhiew ./a.out
 | `PgUp`             | Move cursor up on screen               |
 | `PgDn`             | Move cursor down on screen             |
 
-Supported assembly operator size are: 
+Supported assembly operator sizes are the following: 
 - 64 bit mode;
 - 32 bit protected mode;
 - 16 bit protected mode;
