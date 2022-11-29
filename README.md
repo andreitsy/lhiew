@@ -12,12 +12,12 @@ Linux clone of [hiew editor](https://www.hiew.ru/) which can view binary files i
 
 - [About](##about)
 - [Getting Started](#getting-started)
-    - [Usage](###Usage)
-        - [Open file](####Open file)
-        - [Keybindings](####Keybindings)
-- [Installing](##Installing)
-  - [Requirments](#####Requirments)
-  - [Compilling from source](#####Compilling from source)
+    - [Usage](###usage)
+        - [Open file](####open_file)
+    - [Keybindings](###keybindings)
+- [Installing](##installing)
+  - [Requirments](#####requirments)
+  - [Compilling from source](#####compilling_from_source)
 - [License](#license)
 - [Acknowledgements](#acknowledgements)
 
