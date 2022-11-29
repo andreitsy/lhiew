@@ -3,24 +3,21 @@
 Linux clone of [hiew editor](https://www.hiew.ru/) which can view binary files in raw, hex or dissasembly mode.
 
 
-[![license](https://img.shields.io/github/license/dec0dOS/amazing-github-template.svg?style=flat-square)](LICENSE)
+[![license](https://img.shields.io/github/license/dec0dOS/amazing-github-template.svg?style=flat-square)](src/LICENSE)
 
 </div>
 
 <details open="open">
 <summary>Table of Contents</summary>
 
-- [About](#about)
-    - [Built With](#built-with)
+- [About](##about)
 - [Getting Started](#getting-started)
-    - [Prerequisites](#prerequisites)
-    - [Usage](#usage)
-        - [Cookiecutter template](#cookiecutter-template)
-        - [Manual setup](#manual-setup)
-        - [Variables reference](#variables-reference)
-- [Roadmap](#roadmap)
-- [Contributing](#contributing)
-- [Support](#support)
+    - [Usage](###Usage)
+        - [Open file](####Open file)
+        - [Keybindings](####Keybindings)
+- [Installing](##Installing)
+  - [Requirments](#####Requirments)
+  - [Compilling from source](#####Compilling from source)
 - [License](#license)
 - [Acknowledgements](#acknowledgements)
 
@@ -83,15 +80,11 @@ Please follow these steps for manual setup:
 3. Run `cd build && cmake ..`
 4. Run `make`
 
-##### Downloading
-
-Simply download precompilled binary lhiew.
-
 ## License
 
 This project is licensed under the **MIT license**. Feel free to edit and distribute this template as you like.
 
-See [LICENSE](LICENSE) for more information.
+See [LICENSE](src/LICENSE) for more information.
 
 ## Acknowledgements
 

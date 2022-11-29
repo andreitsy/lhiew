@@ -12,10 +12,10 @@ set(CMAKE_C_FLAGS "-Wall -Wextra -Wpedantic -std=c17 -lm")
 set(CMAKE_C_FLAGS_DEBUG "-g")
 
 add_executable(lhiew
-        main.c
-        input_keyboard.c
-        editor.c
-        output.c
-        dissasembler.c)
+        src/main.c
+        src/input_keyboard.c
+        src/editor.c
+        src/output.c
+        src/dissasembler.c)
 
 target_link_libraries(lhiew PRIVATE "Zydis")
