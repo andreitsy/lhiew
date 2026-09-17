@@ -11,5 +11,6 @@ void   editor_draw_rows(append_buffer *ab);
 void   editor_draw_status_bar(append_buffer *ab);
 void   editor_draw_message_bar(append_buffer *ab);
 void   editor_scroll(void);
+void   editor_draw_screen(append_buffer *ab);
 void   editor_refresh_screen(void);
 void   editor_set_status_message(const char *fmt, ...);

@@ -13,7 +13,8 @@
 
 #define HEX_BYTE_LENGTH    16
 #define DISASSEMBLED_BUFFER_SIZE 128
-#define SCREENCOLS_MIN     80
+#define SCREENCOLS_MIN     24
+#define SCREENROWS_MIN     5
 
 #define EDITOR_VERSION     "0.0.1"
 #define HELLO_MESSAGE      "Help: Ctrl-q = Quit, Ctrl-m = Prev Mode, m = Next Mode, o - Next OpSize"
@@ -53,6 +54,8 @@ typedef struct editorConfig {
     size_t            coloff;
     size_t            screenrows;
     size_t            screencols;
+    size_t            terminal_rows;
+    int               window_too_small;
     size_t            cur_screencols;
     size_t            numrows;
     size_t            num_bytes;

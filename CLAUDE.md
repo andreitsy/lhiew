@@ -71,7 +71,9 @@ The editor is built around a single global `editorConfig global_cfg` (declared i
 
 ### Modes and coordinates
 
-`editorMode` (`TEXT_MODE`, `HEX_MODE`, `DISASSEMBLER_MODE`) selects which `draw_row_*` runs. `switch_mode()` recomputes `cur_screencols`, `cy`, `cx`, and `numrows` from `cur_byte` — hex mode forces `cur_screencols = HEX_BYTE_LENGTH` (16), other modes use the terminal width clamped to `SCREENCOLS_MIN` (80).
+`editorMode` (`TEXT_MODE`, `HEX_MODE`, `DISASSEMBLER_MODE`) selects which `draw_row_*` runs. `switch_mode()` recomputes `cur_screencols`, `cy`, `cx`, and `numrows` from `cur_byte`. Text uses the actual terminal width; hex mode calculates how many bytes fit alongside offsets and ASCII. Disassembly drops the raw-byte column on narrow terminals and clips instruction text to fit.
+
+`editor_resize()` records the physical `terminal_rows` and `screencols`, reserves two rows for status/help, resizes the disassembly buffer, and reflows the cursor. Below `SCREENCOLS_MIN` columns or `SCREENROWS_MIN` total rows (24x5), `window_too_small` pauses navigation and displays a resize message. Input timeouts poll the terminal dimensions, so resizing redraws without a keypress; enlarging restores the selected byte.
 
 The canonical cursor state is `global_cfg.cur_byte` (an absolute byte offset into the mmap). `cx`/`cy` are derived from it via `cur_screencols`. When adding a movement or mode feature, update `cur_byte` and let `switch_mode()` / `get_byte_position()` re-derive the rest; do not maintain `cx`/`cy` independently.
 

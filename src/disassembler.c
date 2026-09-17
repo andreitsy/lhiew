@@ -1,21 +1,41 @@
+#include "lhiew/types.h"
 #include "lhiew/disassembler.h"
 #include "lhiew/terminal.h"
-#include "lhiew/types.h"
 
-#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "Zycore/LibC.h"
 #include "Zydis/Zydis.h"
 
-#define MAX_OP_SIZE 128
+#define DISASSEMBLY_LOOKBACK 128
 
 void free_disassembler_buffer(void) {
     free(global_cfg.disassembler_buffer);
+    global_cfg.disassembler_buffer = NULL;
 }
 
 int disassemble_block(size_t cur_byte) {
+    if (!global_cfg.disassembler_buffer || !global_cfg.screenrows) {
+        return EXIT_SUCCESS;
+    }
+
+    size_t read_offset = cur_byte > DISASSEMBLY_LOOKBACK
+        ? cur_byte - DISASSEMBLY_LOOKBACK : 0;
+    for (size_t row = 0; row < global_cfg.screenrows; ++row) {
+        const disassemblerRow *cached = &global_cfg.disassembler_buffer[row];
+        if (cached->start_byte <= cur_byte && cur_byte < cached->end_byte &&
+            cached->end_byte <= global_cfg.num_bytes) {
+            read_offset = cached->start_byte;
+            break;
+        }
+    }
+    memset(global_cfg.disassembler_buffer, 0,
+           global_cfg.screenrows * sizeof(disassemblerRow));
+    if (!global_cfg.file || cur_byte >= global_cfg.num_bytes) {
+        return EXIT_SUCCESS;
+    }
+
     ZydisDecoder decoder;
     if (global_cfg.disassembler_mode == REAL) {
         ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_REAL_16, ZYDIS_STACK_WIDTH_16);
@@ -40,82 +60,39 @@ int disassemble_block(size_t cur_byte) {
         return EXIT_FAILURE;
     }
 
-    size_t buffer_size = global_cfg.screenrows * MAX_OP_SIZE;
-    uint8_t buffer_block[buffer_size];
-    size_t read_offset_base = 0;
-    if (cur_byte) {
-        for (size_t row = 0; row < global_cfg.screenrows; ++row) {
-            if (global_cfg.disassembler_buffer[row].start_byte <= cur_byte
-                && cur_byte < global_cfg.disassembler_buffer[row].end_byte) {
-                read_offset_base = global_cfg.disassembler_buffer[row].start_byte;
-                break;
-            }
-        }
-        if (read_offset_base == 0) {
-            read_offset_base = cur_byte;
-            if (read_offset_base > MAX_OP_SIZE) {
-                read_offset_base -= MAX_OP_SIZE;
-            } else {
-                read_offset_base = 0;
-            }
-        }
-    }
-
-    if (read_offset_base + buffer_size > global_cfg.num_bytes) {
-        buffer_size = global_cfg.num_bytes - read_offset_base;
-    }
-    memcpy(buffer_block, &global_cfg.file[read_offset_base], buffer_size);
     size_t output_row = 0;
-    bool runtime_after_cur_byte = false;
-    do {
+    while (read_offset < global_cfg.num_bytes && output_row < global_cfg.screenrows) {
         ZydisDecodedInstruction instruction;
         ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
-        ZyanStatus status;
-        ZyanUSize read_offset = 0;
-        while ((status = ZydisDecoderDecodeFull(
-                    &decoder, buffer_block + read_offset,
-                    buffer_size - read_offset,
-                    &instruction, operands)) != ZYDIS_STATUS_NO_MORE_DATA &&
-               output_row < global_cfg.screenrows) {
-            const ZyanU64 runtime_address = read_offset_base + read_offset;
-            char format_buffer[DISASSEMBLED_BUFFER_SIZE];
+        char format_buffer[DISASSEMBLED_BUFFER_SIZE];
+        ZyanStatus status = ZydisDecoderDecodeFull(
+            &decoder, global_cfg.file + read_offset,
+            global_cfg.num_bytes - read_offset, &instruction, operands);
+        size_t instruction_length = 1;
 
-            if (!ZYAN_SUCCESS(status)) {
-                if (runtime_after_cur_byte || (runtime_address >= cur_byte)) {
-                    global_cfg.disassembler_buffer[output_row].start_byte = runtime_address;
-                    global_cfg.disassembler_buffer[output_row].end_byte = runtime_address + 1;
-                    sprintf(global_cfg.disassembler_buffer[output_row].diss_str,
-                            "db %02X", buffer_block[read_offset]);
-                    output_row++;
-                    runtime_after_cur_byte = true;
-                }
-                read_offset++;
-                continue;
+        if (ZYAN_SUCCESS(status)) {
+            status = ZydisFormatterFormatInstruction(
+                &formatter, &instruction, operands, instruction.operand_count_visible,
+                format_buffer, sizeof(format_buffer), read_offset, ZYAN_NULL);
+            if (ZYAN_SUCCESS(status)) {
+                instruction_length = instruction.length;
             }
-
-            ZydisFormatterFormatInstruction(&formatter, &instruction, operands,
-                                            instruction.operand_count_visible,
-                                            format_buffer, sizeof(format_buffer),
-                                            runtime_address, ZYAN_NULL);
-            if (runtime_after_cur_byte
-                || (runtime_address >= cur_byte || cur_byte < runtime_address + instruction.length)) {
-                global_cfg.disassembler_buffer[output_row].start_byte = runtime_address;
-                global_cfg.disassembler_buffer[output_row].end_byte =
-                    runtime_address + instruction.length;
-                strcpy(global_cfg.disassembler_buffer[output_row].diss_str, format_buffer);
-                output_row++;
-                runtime_after_cur_byte = true;
-            }
-            read_offset += instruction.length;
+        }
+        if (!ZYAN_SUCCESS(status)) {
+            /* Invalid or incomplete instructions still consume one file byte. */
+            snprintf(format_buffer, sizeof(format_buffer), "db %02X",
+                     global_cfg.file[read_offset]);
         }
 
-        if (read_offset < sizeof(buffer_block)) {
-            memmove(buffer_block, buffer_block + read_offset,
-                    sizeof(buffer_block) - read_offset);
+        size_t end_byte = read_offset + instruction_length;
+        if (cur_byte < end_byte) {
+            disassemblerRow *row = &global_cfg.disassembler_buffer[output_row++];
+            row->start_byte = read_offset;
+            row->end_byte = end_byte;
+            strcpy(row->diss_str, format_buffer);
         }
-        read_offset_base += read_offset;
-    } while (read_offset_base <= buffer_size &&
-             output_row < global_cfg.screenrows);
+        read_offset = end_byte;
+    }
 
     return EXIT_SUCCESS;
 }

@@ -17,7 +17,8 @@ static void test_disassembler_mode_values(void) {
 static void test_constants(void) {
     ASSERT_EQ(HEX_BYTE_LENGTH, 16);
     ASSERT_EQ(DISASSEMBLED_BUFFER_SIZE, 128);
-    ASSERT_EQ(SCREENCOLS_MIN, 80);
+    ASSERT_EQ(SCREENCOLS_MIN, 24);
+    ASSERT_EQ(SCREENROWS_MIN, 5);
 }
 
 static void test_editor_config_zero_init(void) {
