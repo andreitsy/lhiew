@@ -2,6 +2,7 @@
 #include "lhiew/file_buffer.h"
 #include "lhiew/terminal.h"
 
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -10,8 +11,13 @@
 void read_file_in_editor(FILE *f_in) {
     struct stat stbuf;
     int fd = fileno(f_in);
-    if ((fstat(fd, &stbuf) != 0) || (!S_ISREG(stbuf.st_mode))) {
-        printf("Cannot open file!\n");
+    if (fstat(fd, &stbuf) != 0)
+        die_safely("fstat");
+    if (!S_ISREG(stbuf.st_mode)) {
+        /* Devices and directories report st_size 0, which would otherwise be
+           indistinguishable from an empty file. perror needs errno set. */
+        errno = EINVAL;
+        die_safely("Not a regular file");
     }
     global_cfg.num_bytes = stbuf.st_size;
     if (!global_cfg.num_bytes) {
