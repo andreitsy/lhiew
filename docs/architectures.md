@@ -5,9 +5,10 @@
 An instruction set (ISA), a decoder mode, assembly syntax, and an executable
 container are separate things. x86, ARM and RISC-V are ISAs; Thumb, word width
 and byte order select encodings. Intel and AT&T are two x86 text syntaxes.
-  ELF, PE and Mach-O carry CPU metadata and map file bytes to runtime addresses.
-An assembler encodes text into bytes; this feature adds **disassembly**, not an
-assembler or file editing.
+ELF, PE and Mach-O carry CPU metadata and map file bytes to runtime addresses.
+An assembler encodes text into bytes; the architecture profiles described here
+control **disassembly**. Byte patching is available through the separate
+[hex editor](hex-editing.md); instruction-text assembly remains unimplemented.
 
 There is no header capable of identifying every possible instruction stream.
 Raw firmware and DOS COM files need a manual profile. One executable can also

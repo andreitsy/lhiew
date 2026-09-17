@@ -37,6 +37,7 @@ add_library(lhiew_core STATIC
     src/append_buffer.c
     src/terminal.c
     src/file_buffer.c
+    src/hex_edit.c
     src/editor.c
     src/input.c
     src/render.c
@@ -46,6 +47,7 @@ add_library(lhiew_core STATIC
 )
 
 target_include_directories(lhiew_core PUBLIC include)
+target_compile_definitions(lhiew_core PUBLIC _FILE_OFFSET_BITS=64)
 target_link_libraries(lhiew_core PUBLIC Zydis capstone_static)
 target_compile_options(lhiew_core PRIVATE -Wall -Wextra -Wpedantic)
 
@@ -68,6 +70,16 @@ lhiew_add_test(append_buffer)
 lhiew_add_test(types)
 lhiew_add_test(editor)
 lhiew_add_test(file_buffer)
+lhiew_add_test(hex_edit)
+# Compile the same backend with deterministic I/O/allocation fault injection.
+# The test object satisfies its symbols before the static core is searched.
+add_library(hex_edit_test_backend OBJECT src/hex_edit.c)
+target_link_libraries(hex_edit_test_backend PRIVATE lhiew_core)
+target_compile_options(hex_edit_test_backend PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_definitions(hex_edit_test_backend PRIVATE
+    HEX_PWRITE=hex_test_pwrite HEX_FSYNC=hex_test_fsync HEX_REALLOC=hex_test_realloc
+    HEX_PREAD=hex_test_pread)
+target_sources(test_hex_edit PRIVATE $<TARGET_OBJECTS:hex_edit_test_backend>)
 lhiew_add_test(render)
 lhiew_add_test(input)
 lhiew_add_test(disassembler)
@@ -93,5 +105,10 @@ if(UNIX)
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_terminal_resize.py
                 $<TARGET_FILE:lhiew>)
         set_tests_properties(terminal_resize PROPERTIES TIMEOUT 30)
+        add_test(NAME hex_editor
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_hex_editor.py
+                $<TARGET_FILE:lhiew>)
+        set_tests_properties(hex_editor PROPERTIES TIMEOUT 90)
     endif()
 endif()

@@ -11,6 +11,14 @@ enum editorKey {
     PAGE_DOWN,
     DEL_KEY,
     SHIFT_F1,
+    F3_KEY,
+    F5_KEY,
+    F9_KEY,
+    F10_KEY,
+    HOME_KEY,
+    END_KEY,
+    CTRL_HOME,
+    CTRL_END,
 };
 
 void die_safely(const char *s);

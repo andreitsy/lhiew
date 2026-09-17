@@ -3,6 +3,7 @@
 #include "lhiew/architecture.h"
 #include "lhiew/disassembler.h"
 #include "lhiew/editor.h"
+#include "lhiew/hex_edit.h"
 #include "lhiew/render.h"
 #include "lhiew/terminal.h"
 
@@ -85,6 +86,12 @@ void editor_move_cursor(int key) {
 
     size_t position = global_cfg.cur_byte;
     size_t width = global_cfg.cur_screencols;
+    global_cfg.edit_nibble = 0;
+    if (key == CTRL_HOME || key == CTRL_END) {
+        global_cfg.cur_byte = key == CTRL_HOME ? 0 : global_cfg.num_bytes - 1;
+        switch_mode();
+        return;
+    }
     if (global_cfg.mode == DISASSEMBLER_MODE) {
         if (key == PAGE_UP || key == PAGE_DOWN) {
             global_cfg.cur_byte = disassembler_page_position(position, key);
@@ -97,6 +104,13 @@ void editor_move_cursor(int key) {
             ? global_cfg.disassembler_buffer[row].start_byte : position;
         size_t shift = position - start;
         switch (key) {
+            case HOME_KEY:
+                position = start;
+                break;
+            case END_KEY:
+                if (row < global_cfg.screenrows)
+                    position = global_cfg.disassembler_buffer[row].end_byte - 1;
+                break;
             case ARROW_LEFT:
             case 'h':
                 if (position) position--;
@@ -126,6 +140,16 @@ void editor_move_cursor(int key) {
         }
     } else {
         switch (key) {
+            case HOME_KEY:
+                position -= position % width;
+                break;
+            case END_KEY: {
+                size_t remaining = global_cfg.num_bytes - position;
+                size_t distance = width - position % width - 1;
+                if (remaining)
+                    position += distance < remaining ? distance : remaining - 1;
+                break;
+            }
             case ARROW_LEFT:
             case 'h':
                 if (position) position--;
@@ -145,7 +169,8 @@ void editor_move_cursor(int key) {
                 break;
             case PAGE_UP:
             case PAGE_DOWN: {
-                size_t distance = global_cfg.screenrows * width;
+                size_t distance = global_cfg.screenrows > SIZE_MAX / width
+                    ? SIZE_MAX : global_cfg.screenrows * width;
                 if (key == PAGE_UP) {
                     position -= position < distance ? position : distance;
                 } else {
@@ -204,21 +229,198 @@ static void architecture_menu_keypress(int key) {
     global_cfg.architecture_choice = choice;
 }
 
+static void quit_editor(void) {
+    write(STDOUT_FILENO, "\x1b[2J\x1b[H", 7);
+    exit(0);
+}
+
+static void leave_editor(int quit) {
+    global_cfg.goto_prompt = 0;
+    if (global_cfg.editing && hex_edit_dirty_count()) {
+        global_cfg.edit_exit_prompt = quit ? 2 : 1;
+        return;
+    }
+    if (quit)
+        quit_editor();
+    if (global_cfg.editing) {
+        hex_edit_cancel();
+        if (global_cfg.editing)
+            return;
+    }
+}
+
+static void edit_exit_keypress(int key) {
+    int quit = global_cfg.edit_exit_prompt == 2;
+    if (key == '\x1b') {
+        global_cfg.edit_exit_prompt = 0;
+        return;
+    }
+    if (key != 's' && key != 'S' && key != 'd' && key != 'D')
+        return;
+    /* Dismiss the prompt on an error so the failure message is visible. */
+    global_cfg.edit_exit_prompt = 0;
+    if ((key == 's' || key == 'S') && !hex_edit_save())
+        return;
+    if (quit)
+        quit_editor();
+    hex_edit_cancel();
+}
+
+static int hex_digit(int key) {
+    if (key >= '0' && key <= '9') return key - '0';
+    if (key >= 'a' && key <= 'f') return key - 'a' + 10;
+    if (key >= 'A' && key <= 'F') return key - 'A' + 10;
+    return -1;
+}
+
+static void open_goto_prompt(void) {
+    global_cfg.goto_prompt = 1;
+    global_cfg.goto_length = 0;
+    global_cfg.goto_input[0] = '\0';
+    global_cfg.edit_nibble = 0;
+    global_cfg.statusmsg[0] = '\0';
+}
+
+static void goto_keypress(int key) {
+    if (key == '\x1b') {
+        global_cfg.goto_prompt = 0;
+    } else if (key == 127 || key == CTRL_KEY('h')) {
+        if (global_cfg.goto_length)
+            global_cfg.goto_input[--global_cfg.goto_length] = '\0';
+        global_cfg.statusmsg[0] = '\0';
+    } else if (key == '\r' || key == '\n') {
+        const char *input = global_cfg.goto_input;
+        size_t start = input[0] == '0' && (input[1] == 'x' || input[1] == 'X') ? 2 : 0;
+        size_t offset = 0;
+        int valid = global_cfg.goto_length > start;
+        for (size_t i = start; valid && i < global_cfg.goto_length; ++i) {
+            int digit = hex_digit((unsigned char)input[i]);
+            if (digit < 0 || offset > (SIZE_MAX - (size_t)digit) / 16)
+                valid = 0;
+            else
+                offset = offset * 16 + (size_t)digit;
+        }
+        if (!valid || offset > global_cfg.num_bytes) {
+            editor_set_status_message("Invalid offset; enter hex from 0 to %zx", global_cfg.num_bytes);
+            return;
+        }
+        global_cfg.goto_prompt = 0;
+        global_cfg.statusmsg[0] = '\0';
+        global_cfg.cur_byte = offset;
+        switch_mode();
+    } else if (hex_digit(key) >= 0 || key == 'x' || key == 'X') {
+        if (global_cfg.goto_length < sizeof(global_cfg.goto_input) - 1) {
+            global_cfg.goto_input[global_cfg.goto_length++] = (char)key;
+            global_cfg.goto_input[global_cfg.goto_length] = '\0';
+            global_cfg.statusmsg[0] = '\0';
+        } else {
+            editor_set_status_message("Offset too long; Backspace to correct");
+        }
+    }
+}
+
+static void edit_keypress(int key) {
+    switch (key) {
+        case '\x1b':
+        case F10_KEY:
+            leave_editor(0);
+            return;
+        case F9_KEY:
+            if (hex_edit_save())
+                global_cfg.edit_nibble = 0;
+            return;
+        case F5_KEY:
+            open_goto_prompt();
+            return;
+        case '\t':
+            global_cfg.edit_ascii = !global_cfg.edit_ascii;
+            global_cfg.edit_nibble = 0;
+            global_cfg.statusmsg[0] = '\0';
+            return;
+        case 127:
+        case CTRL_KEY('h'):
+            editor_move_cursor(ARROW_LEFT);
+            return;
+        case HOME_KEY:
+        case END_KEY:
+        case CTRL_HOME:
+        case CTRL_END:
+        case PAGE_UP:
+        case PAGE_DOWN:
+        case ARROW_UP:
+        case ARROW_DOWN:
+        case ARROW_LEFT:
+        case ARROW_RIGHT:
+            editor_move_cursor(key);
+            return;
+    }
+    int digit = hex_digit(key);
+    if ((global_cfg.edit_ascii && (key < 32 || key >= 127)) ||
+        (!global_cfg.edit_ascii && digit < 0))
+        return;
+    size_t offset = global_cfg.cur_byte;
+    if (offset >= global_cfg.num_bytes) {
+        editor_set_status_message("End of file: overwrite existing bytes only");
+        return;
+    }
+    if (!hex_edit_check_file())
+        return;
+    uint8_t byte = global_cfg.edit_ascii ? (uint8_t)key
+        : global_cfg.edit_nibble
+            ? (global_cfg.file[offset] & 0xf0) | (uint8_t)digit
+            : (global_cfg.file[offset] & 0x0f) | (uint8_t)(digit << 4);
+    if (!hex_edit_set_byte(offset, byte))
+        return;
+    global_cfg.statusmsg[0] = '\0';
+    if (global_cfg.edit_ascii || global_cfg.edit_nibble) {
+        global_cfg.cur_byte++;
+        global_cfg.edit_nibble = 0;
+        switch_mode();
+    } else {
+        global_cfg.edit_nibble = 1;
+    }
+}
+
 void editor_process_keypress(void) {
     int c = editor_read_key();
+    if (global_cfg.edit_exit_prompt) {
+        edit_exit_keypress(c);
+        return;
+    }
     if (c == CTRL_KEY('q')) {
-        write(STDOUT_FILENO, "\x1b[2J\x1b[H", 7);
-        exit(0);
+        leave_editor(1);
+        return;
     }
     if (editor_update_window_size())
         editor_refresh_screen();
     if (!c || global_cfg.window_too_small)
         return;
+    if (global_cfg.goto_prompt) {
+        goto_keypress(c);
+        return;
+    }
+    if (global_cfg.editing) {
+        edit_keypress(c);
+        return;
+    }
     if (global_cfg.architecture_menu) {
         architecture_menu_keypress(c);
         return;
     }
     switch (c) {
+        case F3_KEY:
+            if (hex_edit_begin()) {
+                global_cfg.edit_ascii = 0;
+                global_cfg.edit_nibble = 0;
+                if (global_cfg.cur_byte == global_cfg.num_bytes && global_cfg.num_bytes)
+                    global_cfg.cur_byte--;
+                change_mode(HEX_MODE);
+            }
+            break;
+        case F5_KEY:
+        case 'g':
+            open_goto_prompt();
+            break;
         case CTRL_KEY('m'):
             change_mode(global_cfg.mode == 0 ? DISASSEMBLER_MODE : global_cfg.mode - 1);
             break;
@@ -255,6 +457,10 @@ void editor_process_keypress(void) {
             }
             break;
         }
+        case HOME_KEY:
+        case END_KEY:
+        case CTRL_HOME:
+        case CTRL_END:
         case PAGE_UP:
         case PAGE_DOWN:
         case ARROW_UP:
