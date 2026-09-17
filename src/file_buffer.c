@@ -1,5 +1,6 @@
 #include "lhiew/types.h"
 #include "lhiew/file_buffer.h"
+#include "lhiew/architecture.h"
 #include "lhiew/terminal.h"
 
 #include <errno.h>
@@ -23,6 +24,7 @@ void read_file_in_editor(FILE *f_in) {
     if (!global_cfg.num_bytes) {
         global_cfg.file = NULL;
         global_cfg.numrows = 0;
+        architecture_detect_file();
         return;
     }
     global_cfg.file = mmap(NULL, global_cfg.num_bytes,
@@ -31,6 +33,7 @@ void read_file_in_editor(FILE *f_in) {
     if (global_cfg.file == MAP_FAILED) {
         die_safely("Map to memory is failed -> read_file_in_editor");
     }
+    architecture_detect_file();
 }
 
 void open_file_to_view(char *filename) {

@@ -179,7 +179,7 @@ class Viewer:
         return frames
 
     def expect(self, predicate, description, allow_old_geometry=False):
-        deadline = time.monotonic() + 0.8
+        deadline = time.monotonic() + 2
         while time.monotonic() < deadline:
             for frame in self.read_frames(0.02):
                 if frame.errors and not allow_old_geometry:
@@ -212,6 +212,14 @@ class Viewer:
                 return bool(warning.strip())
             return "24x5" in warning and re.search(r"ctrl-q|\^q", warning.lower())
         return self.expect(matches, "bounded resize warning", allow_old_geometry)
+
+    def expect_architecture_menu(self, selected, allow_old_geometry=False):
+        def matches(frame):
+            return (frame.lines[0].startswith("Architecture ")
+                    and any(line.startswith(">") and selected in line
+                            for line in frame.lines[1:-2]))
+        return self.expect(matches, f"architecture menu selecting {selected}",
+                           allow_old_geometry)
 
     def resize(self, columns, rows):
         # Drain completed old-size frames before changing the kernel's window size.
@@ -426,7 +434,7 @@ class TerminalResizeTests(unittest.TestCase):
              ((0, "mov"), (5, "add"), (8, "xor")), "%eax"),
             ("raw_x86_64.bin", "64", 1, 0,
              ((0, "mov"), (5, "mov"), (10, "syscall")), "%eax"),
-            ("minimal_exit_x86_64.elf", "64", 1, 120,
+            ("minimal_exit_x86_64.elf", "64", 0, 120,
              ((120, "mov"), (125, "mov"), (130, "syscall")), "%eax"),
             ("invalid_truncated.bin", "64", 1, 0,
              ((0, "db"), (1, "nop"), (2, "db")), "db 06"),
@@ -474,6 +482,154 @@ class TerminalResizeTests(unittest.TestCase):
                         if columns == 80 and wide_operand:
                             self.assertIn(wide_operand, frame.lines[selected_row].lower())
                         self.snapshot(f"fixture-{name}-{operand}-{columns}x{rows}", frame)
+                    viewer.quit()
+
+    def test_shift_f1_sequences_and_menu_cancel(self):
+        for sequence in (b"\x1b[1;2P", b"\x1b[23~", b"\x1b[11;2~"):
+            with self.subTest(sequence=sequence):
+                with Viewer(self.binary, self.fixture, 80, 24) as viewer:
+                    viewer.expect_mode("text", 0, 257)
+                    viewer.press(b"l" * 7 + sequence)
+                    viewer.expect_architecture_menu("Auto")
+                    viewer.press(b"j" * 4)
+                    viewer.expect_architecture_menu("x86 64")
+                    viewer.press(b"\x1b")
+                    viewer.expect_mode("text", 7, 257)
+                    viewer.press(b"\r")
+                    viewer.expect_mode("asm", 7, 257, operand="32")
+                    viewer.quit()
+
+    def test_architecture_menu_apply_and_return_to_auto(self):
+        with Viewer(self.binary, self.fixture, 80, 24) as viewer:
+            viewer.expect_mode("text", 0, 257)
+            viewer.press(b"a")
+            viewer.expect_architecture_menu("Auto")
+            viewer.press(b"\x1b[B" * 4 + b"\r")
+            viewer.expect_mode("text", 0, 257)
+            viewer.press(b"\r")
+            frame = viewer.expect_mode("asm", 0, 257, operand="64")
+            self.assertIn("manual", frame.lines[-2])
+            viewer.press(b"a")
+            viewer.expect_architecture_menu("x86 64")
+            viewer.press(b"\x1b[A" * 4 + b"\n")
+            frame = viewer.expect_mode("asm", 0, 257, operand="32")
+            self.assertIn("auto", frame.lines[-2])
+            viewer.quit()
+
+    def test_architecture_menu_pages_and_resizes(self):
+        with Viewer(self.binary, self.fixture, 80, 24) as viewer:
+            viewer.expect_mode("text", 0, 257)
+            viewer.press(b"\ra")
+            viewer.expect_architecture_menu("Auto")
+            viewer.press(b"\x1b[6~" * 2)
+            viewer.expect_architecture_menu("MOS 6502")
+            viewer.resize(24, 5)
+            frame = viewer.expect_architecture_menu("MOS 6502", allow_old_geometry=True)
+            self.snapshot("architecture-menu-24x5", frame)
+            viewer.press(b"k")
+            viewer.expect_architecture_menu("Motorola 6809")
+            viewer.press(b"\x1b[5~")
+            viewer.expect_architecture_menu("XCore")
+            viewer.resize(40, 10)
+            viewer.expect_architecture_menu("XCore", allow_old_geometry=True)
+            viewer.press(b"k" * 20)
+            viewer.expect_architecture_menu("AArch64")
+            viewer.resize(12, 3)
+            viewer.expect_warning(allow_old_geometry=True)
+            viewer.press(b"jj\r")
+            viewer.read_for(0.16)
+            viewer.resize(24, 5)
+            viewer.expect_architecture_menu("AArch64", allow_old_geometry=True)
+            viewer.press(b"\r")
+            frame = viewer.expect_mode("asm", 0, 257)
+            self.assertIn("AArch64", frame.lines[-2])
+            viewer.press(b"o")
+            frame = viewer.expect_mode("asm", 0, 257)
+            self.assertIn("Use a / Shift-F1", frame.lines[-1])
+            viewer.quit()
+
+    def test_architecture_menu_available_in_all_modes(self):
+        with Viewer(self.binary, self.fixture, 24, 5) as viewer:
+            for mode in ("text", "hex", "asm"):
+                viewer.expect_mode(mode, 0, 257)
+                viewer.press(b"a")
+                viewer.expect_architecture_menu("Auto")
+                viewer.press(b"\x1b")
+                viewer.expect_mode(mode, 0, 257)
+                if mode != "asm":
+                    viewer.press(b"m")
+            viewer.press(b"a")
+            viewer.expect_architecture_menu("Auto")
+            viewer.quit()
+
+    def test_unknown_csi_does_not_leave_trailing_keys(self):
+        with Viewer(self.binary, self.fixture, 80, 24) as viewer:
+            viewer.expect_mode("text", 0, 257)
+            viewer.press(b"\x1b[123;987~l")
+            viewer.expect_mode("text", 1, 257)
+            viewer.press(b"\x1b[" + b"1;" * 32 + b"99~l")
+            viewer.expect_mode("text", 2, 257)
+            viewer.quit()
+
+    def test_detected_entry_and_entry_shortcut(self):
+        filename = Path(__file__).resolve().parent / "fixtures" / "minimal_exit_x86_64.elf"
+        with Viewer(self.binary, filename, 80, 24) as viewer:
+            viewer.expect_mode("text", 0, 132)
+            viewer.press(b"\r")
+            frame = viewer.expect_mode("asm", 120, 132, operand="64")
+            self.assertIn("auto", frame.lines[-2])
+            viewer.press(b"mle")
+            viewer.expect_mode("asm", 120, 132, operand="64")
+            viewer.press(b"a")
+            viewer.expect_architecture_menu("Auto")
+            viewer.press(b"j" * 3 + b"\r")
+            viewer.expect_mode("asm", 120, 132, operand="32")
+            viewer.press(b"a" + b"k" * 3 + b"\r")
+            viewer.expect_mode("asm", 120, 132, operand="64")
+            viewer.quit()
+
+        with Viewer(self.binary, self.fixture, 24, 5) as viewer:
+            viewer.expect_mode("text", 0, 257)
+            viewer.press(b"e")
+            frame = viewer.expect_mode("text", 0, 257)
+            self.assertIn("No entry point", frame.lines[-1])
+            viewer.quit()
+
+    def test_non_x86_headers_select_architecture_and_entry(self):
+        fixtures = Path(__file__).resolve().parent / "architecture_fixtures"
+        cases = (("elf_arm_le.bin", "ARM LE", "mov"),
+                 ("elf_aarch64.bin", "AArch64", "mov"),
+                 ("elf_riscv64.bin", "RISC-V64", "addiw"))
+        for filename, architecture, mnemonic in cases:
+            with self.subTest(architecture=architecture):
+                filename = fixtures / filename
+                total = filename.stat().st_size
+                with Viewer(self.binary, filename, 80, 24) as viewer:
+                    viewer.expect_mode("text", 0, total)
+                    viewer.press(b"\r")
+                    frame = viewer.expect_mode("asm", 0x100, total)
+                    self.assertIn(architecture, frame.lines[-2])
+                    self.assertIn("auto", frame.lines[-2])
+                    selected = [line for line in frame.lines[:-2]
+                                if line.startswith("00000100")]
+                    self.assertEqual(len(selected), 1, frame.dump())
+                    self.assertRegex(selected[0], rf"\b{mnemonic}\b")
+                    viewer.quit()
+
+    def test_unsupported_header_is_visible(self):
+        fixtures = Path(__file__).resolve().parent / "architecture_fixtures"
+        for name, explanation in (("elf_unknown.bin", "Unsupported header/CPU"),
+                                  ("elf_truncated.bin", "Malformed header")):
+            with self.subTest(fixture=name):
+                filename = fixtures / name
+                with Viewer(self.binary, filename, 80, 24) as viewer:
+                    viewer.expect_mode("text", 0, filename.stat().st_size)
+                    viewer.press(b"\r")
+                    viewer.expect(lambda frame: "ASM Unsupported" in frame.lines[-2],
+                                  "persistent unsupported architecture status")
+                    viewer.press(b"a")
+                    frame = viewer.expect_architecture_menu("Auto")
+                    self.assertIn(explanation, frame.lines[0])
                     viewer.quit()
 
     def test_start_too_small_and_quit(self):

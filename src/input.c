@@ -1,5 +1,6 @@
 #include "lhiew/types.h"
 #include "lhiew/input.h"
+#include "lhiew/architecture.h"
 #include "lhiew/disassembler.h"
 #include "lhiew/editor.h"
 #include "lhiew/render.h"
@@ -159,6 +160,50 @@ void editor_move_cursor(int key) {
     switch_mode();
 }
 
+static void change_mode(editorMode mode) {
+    global_cfg.mode = mode;
+    if (mode == DISASSEMBLER_MODE && !global_cfg.cur_byte)
+        architecture_jump_to_entry();
+    switch_mode();
+}
+
+static void architecture_menu_keypress(int key) {
+    size_t count = architecture_profile_count();
+    if (!count)
+        return;
+    size_t choice = global_cfg.architecture_choice;
+    if (choice >= count)
+        choice = count - 1;
+    size_t page = global_cfg.screenrows > 1 ? global_cfg.screenrows - 1 : 1;
+    switch (key) {
+        case '\x1b':
+            global_cfg.architecture_menu = 0;
+            return;
+        case '\r':
+        case '\n':
+            architecture_select(choice);
+            global_cfg.architecture_menu = 0;
+            return;
+        case ARROW_UP:
+        case 'k':
+            if (choice)
+                choice--;
+            break;
+        case ARROW_DOWN:
+        case 'j':
+            if (choice + 1 < count)
+                choice++;
+            break;
+        case PAGE_UP:
+            choice -= choice < page ? choice : page;
+            break;
+        case PAGE_DOWN:
+            choice += count - choice - 1 < page ? count - choice - 1 : page;
+            break;
+    }
+    global_cfg.architecture_choice = choice;
+}
+
 void editor_process_keypress(void) {
     int c = editor_read_key();
     if (c == CTRL_KEY('q')) {
@@ -169,18 +214,47 @@ void editor_process_keypress(void) {
         editor_refresh_screen();
     if (!c || global_cfg.window_too_small)
         return;
+    if (global_cfg.architecture_menu) {
+        architecture_menu_keypress(c);
+        return;
+    }
     switch (c) {
         case CTRL_KEY('m'):
-            global_cfg.mode = global_cfg.mode == 0 ? DISASSEMBLER_MODE : global_cfg.mode - 1;
-            switch_mode();
+            change_mode(global_cfg.mode == 0 ? DISASSEMBLER_MODE : global_cfg.mode - 1);
             break;
         case 'm':
-            global_cfg.mode = (global_cfg.mode + 1) % 3;
-            switch_mode();
+            change_mode((global_cfg.mode + 1) % 3);
             break;
-        case 'o':
-            global_cfg.disassembler_mode = (global_cfg.disassembler_mode + 1) % 4;
+        case SHIFT_F1:
+        case 'a':
+            global_cfg.architecture_menu = 1;
+            global_cfg.architecture_choice = architecture_current_profile();
             break;
+        case 'e': {
+            const binaryInfo *info = architecture_binary_info();
+            if (info && info->has_entry) {
+                architecture_jump_to_entry();
+                change_mode(DISASSEMBLER_MODE);
+            } else {
+                editor_set_status_message("No entry point in this file");
+            }
+            break;
+        }
+        case 'o': {
+            if (global_cfg.architecture != ARCH_X86) {
+                editor_set_status_message("Use a / Shift-F1 to select architecture");
+                break;
+            }
+            disassemblerMode next = (global_cfg.disassembler_mode + 1) % 4;
+            for (size_t index = 1; index < architecture_profile_count(); ++index) {
+                const architectureProfile *profile = architecture_profile(index);
+                if (profile->spec.id == ARCH_X86 && profile->spec.x86_mode == next) {
+                    architecture_select(index);
+                    break;
+                }
+            }
+            break;
+        }
         case PAGE_UP:
         case PAGE_DOWN:
         case ARROW_UP:

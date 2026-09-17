@@ -2,6 +2,7 @@
 #include "test_harness.h"
 #include "lhiew/disassembler.h"
 #include "lhiew/editor.h"
+#include "lhiew/architecture.h"
 
 static void setup_with_bytes(const uint8_t *data, size_t len) {
     RESET_GLOBAL_CFG();
@@ -306,6 +307,49 @@ static void test_free_disassembler_buffer_null_safe(void) {
     ASSERT_EQ(global_cfg.disassembler_buffer, NULL);
 }
 
+static void test_disassemble_respects_nested_section_mapping(void) {
+    /* ELF32 segment maps the whole image at 0x10000. Its six-byte code section
+       maps offset 0x100 at 0x5000 instead. The E8 just before that section must
+       not consume its bytes, even when rendering forward from the segment. */
+    uint8_t file[272] = {
+        [0] = 0x7f, [1] = 'E', [2] = 'L', [3] = 'F',
+        [4] = 1, [5] = 1, [6] = 1,
+        [16] = 2, [18] = 3, [20] = 1,
+        [24] = 250, [26] = 1, [28] = 52, [32] = 96,
+        [40] = 52, [42] = 32, [44] = 1, [46] = 40, [48] = 2,
+        [52] = 1, [62] = 1, [68] = 16, [69] = 1,
+        [72] = 16, [73] = 1, [76] = 5,
+        [140] = 1, [144] = 6, [149] = 0x50, [153] = 1, [156] = 6,
+        [250] = 0x90, [251] = 0x90, [252] = 0x90,
+        [253] = 0x90, [254] = 0x90, [255] = 0xe8,
+        [256] = 0xe8, [261] = 0xc3,
+    };
+    for (int manual = 0; manual < 2; ++manual) {
+        if (manual)
+            file[18] = 0xff; /* Unknown CPU, but the mapping is still valid. */
+        setup_with_bytes(file, sizeof(file));
+        architecture_detect_file();
+        if (manual) {
+            ASSERT_EQ(global_cfg.architecture, ARCH_UNKNOWN);
+            for (size_t i = 1; i < architecture_profile_count(); ++i) {
+                const architectureSpec *spec = &architecture_profile(i)->spec;
+                if (spec->id == ARCH_X86 && spec->x86_mode == MODE_LONG_COMPAT_32) {
+                    architecture_select(i);
+                    break;
+                }
+            }
+        }
+        ASSERT_EQ(disassemble_block(254), EXIT_SUCCESS);
+        ASSERT_EQ(global_cfg.disassembler_buffer[6].start_byte, (size_t)255);
+        ASSERT_STR_EQ(global_cfg.disassembler_buffer[6].diss_str, "db E8");
+        ASSERT_EQ(global_cfg.disassembler_buffer[7].start_byte, (size_t)256);
+        ASSERT_EQ(global_cfg.disassembler_buffer[7].end_byte, (size_t)261);
+        ASSERT(strstr(global_cfg.disassembler_buffer[7].diss_str, "5005") != NULL);
+        ASSERT_STR_EQ(global_cfg.disassembler_buffer[8].diss_str, "ret");
+        teardown();
+    }
+}
+
 int main(void) {
     printf("test_disassembler:\n");
     RUN_TEST(test_disassemble_nops);
@@ -325,5 +369,6 @@ int main(void) {
     RUN_TEST(test_disassemble_empty_or_missing_file);
     RUN_TEST(test_disassemble_without_visible_rows_or_buffer);
     RUN_TEST(test_free_disassembler_buffer_null_safe);
+    RUN_TEST(test_disassemble_respects_nested_section_mapping);
     TEST_REPORT();
 }

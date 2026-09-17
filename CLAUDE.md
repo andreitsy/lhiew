@@ -4,11 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-LHiew is a Linux terminal clone of the Hiew editor. It views binary files in text, hex, or x86 disassembly (AT&T-style) modes. It is a C17 program built with CMake that uses raw-mode termios I/O (no curses) and links against the Zydis disassembler.
+LHiew is a Linux terminal binary viewer inspired by Hiew. It views files in text,
+hex, or disassembly modes. It is a C17 program built with CMake that uses raw-mode
+termios I/O (no curses). Zydis handles x86 with AT&T syntax; Capstone 5.0.9 handles
+the other supported CPUs. See `docs/architectures.md` for the support matrix,
+design, source specifications, and limits.
 
 ## Build / Run / Test
 
-The repo must be cloned recursively because the disassembler lives in a git submodule at `deps/zydis`:
+Clone recursively to initialize the pinned `deps/zydis` and `deps/capstone` submodules:
 
 ```sh
 git submodule update --init --recursive   # if not cloned with --recursive
@@ -39,6 +43,8 @@ include/lhiew/    Public headers (one per module)
 src/              Implementation files + main.c
 tests/            Per-module test files + test_harness.h
 deps/zydis/       Zydis disassembler (git submodule)
+deps/capstone/    Non-x86 decoders (pinned git submodule)
+docs/            Architecture analysis and implementation design
 ```
 
 ### Build targets
@@ -60,7 +66,9 @@ The editor is built around a single global `editorConfig global_cfg` (declared i
 - **editor** (`editor.h`, `editor.c`) — `init_editor` lifecycle, `switch_mode` (recomputes `cx`/`cy`/`numrows` from `cur_byte`), `get_row_len`.
 - **input** (`input.h`, `input.c`) — `editor_process_keypress` dispatches keys: mode switching (`m` / `Ctrl-M`), disassembler operand-size cycling (`o`), cursor movement via `editor_move_cursor`, quit (`Ctrl-Q`).
 - **render** (`render.h`, `render.c`) — per-mode row drawing (`draw_row_text`, `draw_row_hex`, `draw_row_disassembler`), status/message bars, scrolling, `editor_refresh_screen`.
-- **disassembler** (`disassembler.h`, `disassembler.c`) — wraps Zydis. `disassemble_block(cur_byte)` fills `global_cfg.disassembler_buffer` with up to `screenrows` decoded instruction rows, centering the instruction containing `cur_byte` when enough preceding instructions exist. Decoding uses a bounded lookback and preserves cached instruction boundaries.
+- **binary** (`binary.h`, `binary.c`) — bounded ELF, PE/TE, DOS MZ and thin Mach-O parsing. Distinguishes raw, detected, unsupported and malformed files; supplies entry/first-code offsets and file-region-to-runtime-address mappings without heap allocation.
+- **architecture** (`architecture.h`, `architecture.c`) — named decoder profiles, automatic detection on file read, manual overrides, profile labels, instruction alignment and entry navigation. Static detection metadata is valid only for the currently detected file; `binary_detected` and file identity gate access.
+- **disassembler** (`disassembler.h`, `disassembler.c`) — wraps Zydis/Capstone. `disassemble_block(cur_byte)` fills `global_cfg.disassembler_buffer` with up to `screenrows` rows, centering the instruction containing `cur_byte`. A single forward decoding pass retains preceding rows in a ring, preserving Thumb IT state. Bounded lookback respects cached boundaries, known entry points, instruction alignment and mapped region ends.
 
 ### Runtime loop (`src/main.c`)
 
@@ -77,7 +85,24 @@ The editor is built around a single global `editorConfig global_cfg` (declared i
 
 The canonical cursor state is `global_cfg.cur_byte` (an absolute byte offset into the mmap). `cx`/`cy` are derived from it via `cur_screencols`. When adding a movement or mode feature, update `cur_byte` and let `switch_mode()` / `get_byte_position()` re-derive the rest; do not maintain `cx`/`cy` independently.
 
-`disassemblerMode` (`REAL`, `MODE_LONG_COMPAT_16/32/64`) is a separate axis that only affects how Zydis decodes instructions; `init_editor()` defaults it to 32-bit.
+`disassemblerMode` (`REAL`, `MODE_LONG_COMPAT_16/32/64`) controls x86 decoding;
+`architecture` and `big_endian` select the wider CPU profile. `init_editor()`
+defaults to x86-32. File headers override those defaults; raw files retain the
+x86 fallback, while unsupported/malformed headers select `ARCH_UNKNOWN` and
+render bytes. `architecture_select()` clears cached rows without moving
+`cur_byte`; selecting Auto re-detects the header (raw resets to x86-32).
+
+Shift-F1 or `a` opens the scrollable architecture menu. `architecture_menu` and
+`architecture_choice` hold its state; Escape cancels, Enter applies. `o` cycles
+x86 modes via the same profile API. `e` jumps to the detected entry/first code
+region; entering assembly mode at offset zero also performs that jump. All new
+state is initialized in `init_editor()`. The menu uses the normal append buffer.
+
+The left gutter remains a file offset. Instruction formatting uses the mapped
+runtime address for supported containers; raw/unmapped bytes use file offsets.
+Native relative operand syntax, including RISC-V branch displacements, is retained.
+No relocations, symbols, universal-binary slices, or mixed ARM mapping symbols
+are applied. Changing a decode profile does not claim to translate file content.
 
 Page Up/Down moves by `screenrows` instructions in disassembly, preserving the byte offset within the destination instruction where it fits. Text and hex paging moves by `screenrows * cur_screencols` bytes. All modes clamp paging at file boundaries.
 
@@ -92,4 +117,5 @@ All drawing goes through `append_buffer`: code appends strings (including ANSI e
 ## Dependencies
 
 - **Zydis** (submodule at `deps/zydis`) — added via `add_subdirectory` with `ZYDIS_BUILD_TOOLS` and `ZYDIS_BUILD_EXAMPLES` turned off, linked as `PUBLIC Zydis` through `lhiew_core`.
+- **Capstone 5.0.9** (submodule at `deps/capstone`) — static native non-x86 backends; x86/EVM/WASM, tools, install targets, and upstream tests disabled. Full instruction strings enabled. Headers treated as third-party system includes.
 - Requires CMake >= 3.20 and a C17 compiler. Linux-only: depends on `termios.h`, `sys/ioctl.h` (`TIOCGWINSZ`), and `sys/mman.h` (`mmap`).

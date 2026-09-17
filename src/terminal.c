@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
 
@@ -50,27 +51,37 @@ int editor_read_key(void) {
             return 0;
     }
     if (c == '\x1b') {
-        char seq[3];
-        if (read(STDIN_FILENO, &seq[0], 1) != 1) return '\x1b';
-        if (read(STDIN_FILENO, &seq[1], 1) != 1) return '\x1b';
-        if (seq[0] == '[') {
-            if (seq[1] >= '0' && seq[1] <= '9') {
-                if (read(STDIN_FILENO, &seq[2], 1) != 1) return '\x1b';
-                if (seq[2] == '~') {
-                    switch (seq[1]) {
-                        case '3': return DEL_KEY;
-                        case '5': return PAGE_UP;
-                        case '6': return PAGE_DOWN;
-                    }
-                }
-            } else {
-                switch (seq[1]) {
-                    case 'A': return ARROW_UP;
-                    case 'B': return ARROW_DOWN;
-                    case 'C': return ARROW_RIGHT;
-                    case 'D': return ARROW_LEFT;
-                }
-            }
+        char introducer;
+        if (read(STDIN_FILENO, &introducer, 1) != 1) return '\x1b';
+        if (introducer != '[' && introducer != 'O')
+            return 0;
+        char seq[32];
+        size_t length = 0;
+        int overflow = 0;
+        char byte;
+        do {
+            if (read(STDIN_FILENO, &byte, 1) != 1)
+                return 0;
+            if (length < sizeof(seq) - 1)
+                seq[length++] = byte;
+            else
+                overflow = 1;
+        } while ((unsigned char)byte < 0x40 || (unsigned char)byte > 0x7e);
+        seq[length] = '\0';
+        /* Consume unknown and oversized sequences in full, without stray keys. */
+        if (overflow)
+            return 0;
+        if (introducer == '[' &&
+            (!strcmp(seq, "1;2P") || !strcmp(seq, "23~") || !strcmp(seq, "11;2~")))
+            return SHIFT_F1;
+        if (!strcmp(seq, "3~")) return DEL_KEY;
+        if (!strcmp(seq, "5~")) return PAGE_UP;
+        if (!strcmp(seq, "6~")) return PAGE_DOWN;
+        switch (byte) {
+            case 'A': return ARROW_UP;
+            case 'B': return ARROW_DOWN;
+            case 'C': return ARROW_RIGHT;
+            case 'D': return ARROW_LEFT;
         }
         return 0;
     }

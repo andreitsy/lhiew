@@ -86,6 +86,12 @@ int editor_update_window_size(void) {
 
 void init_editor(void) {
     global_cfg.disassembler_mode = MODE_LONG_COMPAT_32;
+    global_cfg.architecture = ARCH_X86;
+    global_cfg.big_endian = 0;
+    global_cfg.architecture_manual = 0;
+    global_cfg.architecture_menu = 0;
+    global_cfg.architecture_choice = 0;
+    global_cfg.binary_detected = 0;
     global_cfg.mode = TEXT_MODE;
     global_cfg.cx = 0;
     global_cfg.cy = 0;
