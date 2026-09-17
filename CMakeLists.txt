@@ -45,6 +45,7 @@ add_library(lhiew_core STATIC
     src/disassembler.c
     src/architecture.c
     src/binary.c
+    src/search.c
     src/executable.c
     src/executable_pe.c
     src/executable_ne.c
@@ -94,6 +95,7 @@ lhiew_add_test(disassembler)
 lhiew_add_test(binary_fixtures)
 lhiew_add_test(architectures)
 lhiew_add_test(binary)
+lhiew_add_test(search)
 lhiew_add_test(executable_pe)
 lhiew_add_test(executable_ne)
 lhiew_add_test(executable_linear)
@@ -127,5 +129,10 @@ if(UNIX)
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_executable_browser.py
                 $<TARGET_FILE:lhiew>)
         set_tests_properties(executable_browser PROPERTIES TIMEOUT 90)
+        add_test(NAME search_ui
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_search_ui.py
+                $<TARGET_FILE:lhiew>)
+        set_tests_properties(search_ui PROPERTIES TIMEOUT 60)
     endif()
 endif()

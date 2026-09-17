@@ -6,6 +6,7 @@
 #include "lhiew/executable_browser.h"
 #include "lhiew/hex_edit.h"
 #include "lhiew/render.h"
+#include "lhiew/search.h"
 #include "lhiew/terminal.h"
 
 #include <stdlib.h>
@@ -333,6 +334,12 @@ static void edit_keypress(int key) {
         case F5_KEY:
             open_goto_prompt();
             return;
+        case F7_KEY:
+            search_open_prompt();
+            return;
+        case SHIFT_F7:
+            search_repeat(global_cfg.search_backward);
+            return;
         case F8_KEY:
             executable_browser_open();
             return;
@@ -403,6 +410,10 @@ void editor_process_keypress(void) {
         goto_keypress(c);
         return;
     }
+    if (global_cfg.search_prompt) {
+        search_keypress(c);
+        return;
+    }
     if (global_cfg.executable_browser) {
         executable_browser_keypress(c);
         return;
@@ -432,6 +443,19 @@ void editor_process_keypress(void) {
         case F5_KEY:
         case 'g':
             open_goto_prompt();
+            break;
+        case F7_KEY:
+        case 's':
+            search_open_prompt();
+            break;
+        case SHIFT_F7:
+            search_repeat(global_cfg.search_backward);
+            break;
+        case 'n':
+            search_repeat(0);
+            break;
+        case 'N':
+            search_repeat(1);
             break;
         case CTRL_KEY('m'):
             change_mode(global_cfg.mode == 0 ? DISASSEMBLER_MODE : global_cfg.mode - 1);
