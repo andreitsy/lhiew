@@ -97,10 +97,10 @@ static void test_open_and_decode_elf_entry(void) {
     const uint8_t entry[] = {0x78, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00};
     ASSERT(memcmp(global_cfg.file + 24, entry, sizeof(entry)) == 0);
     ASSERT_EQ(disassemble_block(0x78), EXIT_SUCCESS);
-    assert_row(0, 0x78, 0x7D, "mov", "$0x3C", "%eax");
-    assert_row(1, 0x7D, 0x82, "mov", "$0x2A", "%edi");
-    assert_row(2, 0x82, 0x84, "syscall", NULL, NULL);
-    assert_unused_rows(3);
+    assert_row(5, 0x78, 0x7D, "mov", "$0x3C", "%eax");
+    assert_row(6, 0x7D, 0x82, "mov", "$0x2A", "%edi");
+    assert_row(7, 0x82, 0x84, "syscall", NULL, NULL);
+    assert_unused_rows(8);
 }
 
 static void test_fixture_resize_inside_instruction_and_eof(void) {
@@ -111,16 +111,18 @@ static void test_fixture_resize_inside_instruction_and_eof(void) {
     editor_resize(24, 40);
     ASSERT_EQ(global_cfg.cur_byte, (size_t)6);
     ASSERT_EQ(disassemble_block(global_cfg.cur_byte), EXIT_SUCCESS);
-    assert_row(0, 5, 8, "add", "$0x01", "%eax");
-    assert_row(1, 8, 10, "xor", "%ebx, %ebx", NULL);
-    assert_row(2, 10, 11, "ret", NULL, NULL);
-    assert_unused_rows(3);
+    assert_row(0, 0, 5, "mov", "$0x12345678", "%eax");
+    assert_row(1, 5, 8, "add", "$0x01", "%eax");
+    assert_row(2, 8, 10, "xor", "%ebx, %ebx", NULL);
+    assert_row(3, 10, 11, "ret", NULL, NULL);
+    assert_unused_rows(4);
 
     global_cfg.cur_byte = 10;
     editor_resize(5, 24);
     ASSERT_EQ(disassemble_block(global_cfg.cur_byte), EXIT_SUCCESS);
-    assert_row(0, 10, 11, "ret", NULL, NULL);
-    assert_unused_rows(1);
+    assert_row(0, 8, 10, "xor", "%ebx, %ebx", NULL);
+    assert_row(1, 10, 11, "ret", NULL, NULL);
+    assert_unused_rows(2);
     ASSERT_EQ(disassemble_block(global_cfg.num_bytes), EXIT_SUCCESS);
     assert_unused_rows(0);
 }
@@ -134,8 +136,10 @@ static void test_open_invalid_and_truncated_fixture(void) {
     assert_row(2, 2, 3, "db E8", NULL, NULL);
     assert_unused_rows(3);
     ASSERT_EQ(disassemble_block(2), EXIT_SUCCESS);
-    assert_row(0, 2, 3, "db E8", NULL, NULL);
-    assert_unused_rows(1);
+    assert_row(0, 0, 1, "db 06", NULL, NULL);
+    assert_row(1, 1, 2, "nop", NULL, NULL);
+    assert_row(2, 2, 3, "db E8", NULL, NULL);
+    assert_unused_rows(3);
 }
 
 static void test_open_empty_fixture(void) {

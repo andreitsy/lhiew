@@ -55,6 +55,12 @@ prioritize offsets and instructions, adding the raw instruction bytes when
 space permits. Long instructions are marked with `~` when truncated.
 The status and help bars also adapt to the available width.
 
+Disassembly keeps the selected instruction near the middle of the screen,
+with preceding instructions above it when available. `PgUp` and `PgDn` move
+by one screen of instructions; text and hex modes move by one screen of rows.
+
+![Centered disassembly with the selected instruction highlighted](pics/assembler-centered.png)
+
 #### Tests and sample binaries
 
 After building, run `ctest --test-dir build --output-on-failure`. Unit tests cover
@@ -81,8 +87,8 @@ press `m` twice for disassembly, then `o` once to select 64-bit decoding.
 | `k`, `Up Arrow`    | Move cursor up                         |
 | `j`, `Down Arrow`  | Move cursor down                       |
 | `l`, `Right Arrow` | Move cursor right                      |
-| `PgUp`             | Move cursor up on screen               |
-| `PgDn`             | Move cursor down on screen             |
+| `PgUp`             | Move up one screen                     |
+| `PgDn`             | Move down one screen                   |
 
 Supported assembly operator sizes are the following: 
 - 64 bit mode;

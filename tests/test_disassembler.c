@@ -1,6 +1,7 @@
 #include "lhiew/types.h"
 #include "test_harness.h"
 #include "lhiew/disassembler.h"
+#include "lhiew/editor.h"
 
 static void setup_with_bytes(const uint8_t *data, size_t len) {
     RESET_GLOBAL_CFG();
@@ -120,8 +121,9 @@ static void test_disassemble_from_offset(void) {
 
     disassemble_block(5);
 
-    ASSERT_EQ(global_cfg.disassembler_buffer[0].start_byte, (size_t)5);
-    ASSERT(strstr(global_cfg.disassembler_buffer[0].diss_str, "ret") != NULL);
+    ASSERT_EQ(global_cfg.disassembler_buffer[0].start_byte, (size_t)0);
+    ASSERT_EQ(global_cfg.disassembler_buffer[5].start_byte, (size_t)5);
+    ASSERT(strstr(global_cfg.disassembler_buffer[5].diss_str, "ret") != NULL);
 
     teardown();
 }
@@ -148,9 +150,10 @@ static void test_disassemble_clears_rows_at_end_of_file(void) {
 
     ASSERT_EQ(disassemble_block(0), EXIT_SUCCESS);
     ASSERT_EQ(disassemble_block(sizeof(code) - 1), EXIT_SUCCESS);
-    ASSERT_EQ(global_cfg.disassembler_buffer[0].start_byte, sizeof(code) - 1);
-    ASSERT_EQ(global_cfg.disassembler_buffer[0].end_byte, sizeof(code));
-    for (size_t i = 1; i < global_cfg.screenrows; ++i) {
+    size_t selected = global_cfg.screenrows / 2;
+    ASSERT_EQ(global_cfg.disassembler_buffer[selected].start_byte, sizeof(code) - 1);
+    ASSERT_EQ(global_cfg.disassembler_buffer[selected].end_byte, sizeof(code));
+    for (size_t i = selected + 1; i < global_cfg.screenrows; ++i) {
         ASSERT_EQ(global_cfg.disassembler_buffer[i].start_byte, (size_t)0);
         ASSERT_EQ(global_cfg.disassembler_buffer[i].end_byte, (size_t)0);
         ASSERT_STR_EQ(global_cfg.disassembler_buffer[i].diss_str, "");
@@ -182,6 +185,53 @@ static void test_disassemble_cursor_inside_instruction_after_resize(void) {
     ASSERT_EQ(global_cfg.disassembler_buffer[2].start_byte, (size_t)4);
     ASSERT_EQ(global_cfg.disassembler_buffer[3].end_byte, (size_t)0);
 
+    teardown();
+}
+
+static void test_disassemble_centers_selection_across_redraws_and_resize(void) {
+    /* Repeated 10-byte movabs instructions require more than 128 bytes of
+       preceding context in tall windows. Immediate bytes are also valid NOPs. */
+    uint8_t code[1000];
+    memset(code, 0x90, sizeof(code));
+    for (size_t i = 0; i < sizeof(code); i += 10) {
+        code[i] = 0x48;
+        code[i + 1] = 0xB8;
+    }
+    setup_with_bytes(code, sizeof(code));
+    global_cfg.mode = DISASSEMBLER_MODE;
+    global_cfg.cur_byte = 603;
+    const size_t heights[] = {12, 62, 5, 24};
+    for (size_t h = 0; h < sizeof(heights) / sizeof(heights[0]); ++h) {
+        editor_resize(heights[h], 80);
+        for (size_t redraw = 0; redraw < 3; ++redraw) {
+            ASSERT_EQ(disassemble_block(global_cfg.cur_byte), EXIT_SUCCESS);
+            ASSERT_EQ(global_cfg.cur_byte, (size_t)603);
+            size_t middle = global_cfg.screenrows / 2;
+            for (size_t row = 0; row < global_cfg.screenrows; ++row) {
+                const disassemblerRow *instruction = &global_cfg.disassembler_buffer[row];
+                ASSERT_EQ(instruction->start_byte, 600 - middle * 10 + row * 10);
+                ASSERT_EQ(instruction->end_byte, instruction->start_byte + 10);
+                ASSERT(strstr(instruction->diss_str, "mov") != NULL);
+            }
+        }
+    }
+    teardown();
+}
+
+static void test_disassemble_centers_near_start_and_with_invalid_bytes(void) {
+    uint8_t code[64];
+    memset(code, 0x06, sizeof(code)); /* Invalid in 64-bit mode. */
+    setup_with_bytes(code, sizeof(code));
+    ASSERT_EQ(disassemble_block(2), EXIT_SUCCESS);
+    ASSERT_EQ(global_cfg.disassembler_buffer[0].start_byte, (size_t)0);
+    ASSERT_EQ(global_cfg.disassembler_buffer[2].start_byte, (size_t)2);
+
+    ASSERT_EQ(disassemble_block(30), EXIT_SUCCESS);
+    for (size_t row = 0; row < global_cfg.screenrows; ++row) {
+        ASSERT_EQ(global_cfg.disassembler_buffer[row].start_byte, 25 + row);
+        ASSERT_EQ(global_cfg.disassembler_buffer[row].end_byte, 26 + row);
+        ASSERT_STR_EQ(global_cfg.disassembler_buffer[row].diss_str, "db 06");
+    }
     teardown();
 }
 
@@ -268,6 +318,8 @@ int main(void) {
     RUN_TEST(test_disassemble_one_row_with_lookback);
     RUN_TEST(test_disassemble_clears_rows_at_end_of_file);
     RUN_TEST(test_disassemble_cursor_inside_instruction_after_resize);
+    RUN_TEST(test_disassemble_centers_selection_across_redraws_and_resize);
+    RUN_TEST(test_disassemble_centers_near_start_and_with_invalid_bytes);
     RUN_TEST(test_disassemble_invalid_and_truncated_bytes);
     RUN_TEST(test_disassemble_tall_window);
     RUN_TEST(test_disassemble_empty_or_missing_file);
