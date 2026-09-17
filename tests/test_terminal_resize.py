@@ -247,6 +247,10 @@ class TerminalResizeTests(unittest.TestCase):
         cls.directory = tempfile.TemporaryDirectory(prefix="lhiew-pty-")
         cls.fixture = Path(cls.directory.name) / "nops.bin"
         cls.fixture.write_bytes(b"\x90" * 257)
+        cls.large = Path(cls.directory.name) / "large.bin"
+        cls.large.write_bytes(b"\x90" * 4097)
+        cls.mixed = Path(cls.directory.name) / "mixed.bin"
+        cls.mixed.write_bytes(b"\xb8\x78\x56\x34\x12\x90" * 100)
         cls.empty = Path(cls.directory.name) / "empty.bin"
         cls.empty.write_bytes(b"")
         cls.short = Path(cls.directory.name) / "short.bin"
@@ -261,6 +265,17 @@ class TerminalResizeTests(unittest.TestCase):
             self.snapshot_dir.mkdir(parents=True, exist_ok=True)
             (self.snapshot_dir / f"{label}.txt").write_text(frame.dump() + "\n")
 
+    def assert_centered_nop(self, frame, offset):
+        content_rows = frame.rows - 2
+        selected_row = min(offset, content_rows // 2)
+        first_offset = offset - selected_row
+        for row, line in enumerate(frame.lines[:content_rows]):
+            address = first_offset + row
+            if address < 257:
+                self.assertTrue(line.startswith(f"{address:08x}"), frame.dump())
+                self.assertRegex(line.lower(), r"\bnop\b", frame.dump())
+        self.assertTrue(frame.lines[selected_row].startswith(f"{offset:08x}"), frame.dump())
+
     def test_startup_sizes_and_modes(self):
         for columns, rows in ((24, 5), (40, 10), (80, 24), (120, 40)):
             with self.subTest(size=(columns, rows)):
@@ -271,7 +286,7 @@ class TerminalResizeTests(unittest.TestCase):
                         if mode == "text":
                             self.assertEqual(len(frame.lines[0].rstrip()), columns)
                         if mode == "asm":
-                            self.assertIn("nop", "\n".join(frame.lines[:-2]).lower())
+                            self.assert_centered_nop(frame, 0)
                         if mode != "asm":
                             viewer.press(b"m")
                     viewer.quit()
@@ -287,7 +302,7 @@ class TerminalResizeTests(unittest.TestCase):
                     frame = viewer.expect_mode(mode, 17, 257, allow_old_geometry=True)
                     self.snapshot(f"resized-{columns}x{rows}-{mode}", frame)
                     if mode == "asm":
-                        self.assertIn("nop", "\n".join(frame.lines[:-2]).lower())
+                        self.assert_centered_nop(frame, 17)
                 for columns, rows in ((1, 1), (12, 3), (24, 4)):
                     viewer.resize(columns, rows)
                     frame = viewer.expect_warning(allow_old_geometry=True)
@@ -303,6 +318,65 @@ class TerminalResizeTests(unittest.TestCase):
                 if mode != "asm":
                     viewer.press(b"m")
                     viewer.expect_mode("hex" if mode == "text" else "asm", 17, 257)
+            viewer.quit()
+
+    def test_assembler_centering_and_page_navigation(self):
+        for mode_keys in (b"mm", b"\r"):
+            with self.subTest(mode_keys=mode_keys):
+                with Viewer(self.binary, self.fixture, 80, 24) as viewer:
+                    viewer.expect_mode("text", 0, 257)
+                    viewer.press(b"l" * 73 + mode_keys)
+                    frame = viewer.expect_mode("asm", 73, 257)
+                    self.assert_centered_nop(frame, 73)
+                    for key, offset in ((b"\x1b[B", 74), (b"\x1b[A", 73)):
+                        viewer.press(key)
+                        frame = viewer.expect_mode("asm", offset, 257)
+                        self.assert_centered_nop(frame, offset)
+                    for columns, rows in ((24, 5), (120, 40), (40, 10)):
+                        viewer.resize(columns, rows)
+                        frame = viewer.expect_mode("asm", 73, 257, allow_old_geometry=True)
+                        self.assert_centered_nop(frame, 73)
+                        page_rows = rows - 2
+                        for key, offset in ((b"\x1b[6~", 73 + page_rows),
+                                            (b"\x1b[5~", 73)):
+                            viewer.press(key)
+                            frame = viewer.expect_mode("asm", offset, 257)
+                            self.assert_centered_nop(frame, offset)
+                        self.snapshot(f"centered-{columns}x{rows}-asm", frame)
+                    viewer.quit()
+
+    def test_page_keys_move_one_screen_in_each_mode(self):
+        modes = (("text", b"", 320), ("hex", b"m", 32), ("asm", b"\r", 8))
+        for mode, mode_keys, page_bytes in modes:
+            with self.subTest(mode=mode):
+                with Viewer(self.binary, self.large, 40, 10) as viewer:
+                    viewer.expect_mode("text", 0, 4097)
+                    viewer.press(b"l" * 7 + mode_keys)
+                    viewer.expect_mode(mode, 7, 4097)
+                    for key, offset in ((b"\x1b[6~", 7 + page_bytes),
+                                        (b"\x1b[6~", 7 + 2 * page_bytes),
+                                        (b"\x1b[5~", 7 + page_bytes),
+                                        (b"\x1b[5~", 7),
+                                        (b"\x1b[5~", 0),
+                                        (b"\x1b[5~", 0)):
+                        viewer.press(key)
+                        viewer.expect_mode(mode, offset, 4097)
+                    viewer.quit()
+
+    def test_assembler_pages_follow_mixed_instruction_lengths(self):
+        with Viewer(self.binary, self.mixed, 40, 10) as viewer:
+            viewer.expect_mode("text", 0, 600)
+            # Start two bytes into a five-byte mov; each following nop is one byte.
+            viewer.press(b"l" * 8 + b"\r")
+            viewer.expect_mode("asm", 8, 600)
+            for key, offset in ((b"\x1b[6~", 32), (b"\x1b[6~", 56),
+                                (b"\x1b[5~", 32), (b"\x1b[5~", 8)):
+                viewer.press(key)
+                frame = viewer.expect_mode("asm", offset, 600)
+                selected_row = min((offset // 6) * 2, 4)
+                self.assertTrue(frame.lines[selected_row].startswith(f"{offset - 2:08x}"),
+                                frame.dump())
+                self.assertRegex(frame.lines[selected_row].lower(), r"\bmov\b", frame.dump())
             viewer.quit()
 
     def test_empty_no_file_and_eof(self):
@@ -330,10 +404,12 @@ class TerminalResizeTests(unittest.TestCase):
                 viewer.press(key)
                 viewer.expect_mode("text", offset, 7)
             viewer.press(b"mm" + b"l" * 7)
-            viewer.expect_mode("asm", 7, 7)
+            frame = viewer.expect_mode("asm", 7, 7)
+            self.assertTrue(all(line.strip() == "~" for line in frame.lines[:-2]), frame.dump())
             for key, offset in ((b"l", 7), (b"j", 7), (b"k", 6),
                                 (b"h", 5), (b"l", 6), (b"l", 7),
-                                (b"\x1b[5~", 7), (b"\x1b[6~", 7),
+                                (b"\x1b[5~", 0), (b"\x1b[5~", 0),
+                                (b"\x1b[6~", 7), (b"\x1b[6~", 7),
                                 (b"h" * 8, 0), (b"k", 0), (b"l", 1)):
                 viewer.press(key)
                 viewer.expect_mode("asm", offset, 7)
@@ -383,12 +459,20 @@ class TerminalResizeTests(unittest.TestCase):
                             viewer.resize(columns, rows)
                             frame = viewer.expect_mode("asm", offset, total,
                                                        allow_old_geometry=True, operand=operand)
-                        for line_number, (address, mnemonic) in enumerate(instructions):
-                            line = frame.lines[line_number].lower()
+                        selected_row = 0
+                        if instructions:
+                            first_address = f"{instructions[0][0]:08x}"
+                            matches = [row for row, line in enumerate(frame.lines[:-2])
+                                       if line.startswith(first_address)]
+                            self.assertEqual(len(matches), 1, frame.dump())
+                            selected_row = matches[0]
+                        visible_instructions = instructions[:rows - 2 - selected_row]
+                        for line_number, (address, mnemonic) in enumerate(visible_instructions):
+                            line = frame.lines[selected_row + line_number].lower()
                             self.assertTrue(line.startswith(f"{address:08x}"), frame.dump())
                             self.assertRegex(line, rf"\b{mnemonic}\b", frame.dump())
                         if columns == 80 and wide_operand:
-                            self.assertIn(wide_operand, frame.lines[0].lower())
+                            self.assertIn(wide_operand, frame.lines[selected_row].lower())
                         self.snapshot(f"fixture-{name}-{operand}-{columns}x{rows}", frame)
                     viewer.quit()
 

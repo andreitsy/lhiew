@@ -60,7 +60,7 @@ The editor is built around a single global `editorConfig global_cfg` (declared i
 - **editor** (`editor.h`, `editor.c`) — `init_editor` lifecycle, `switch_mode` (recomputes `cx`/`cy`/`numrows` from `cur_byte`), `get_row_len`.
 - **input** (`input.h`, `input.c`) — `editor_process_keypress` dispatches keys: mode switching (`m` / `Ctrl-M`), disassembler operand-size cycling (`o`), cursor movement via `editor_move_cursor`, quit (`Ctrl-Q`).
 - **render** (`render.h`, `render.c`) — per-mode row drawing (`draw_row_text`, `draw_row_hex`, `draw_row_disassembler`), status/message bars, scrolling, `editor_refresh_screen`.
-- **disassembler** (`disassembler.h`, `disassembler.c`) — wraps Zydis. `disassemble_block(cur_byte)` fills `global_cfg.disassembler_buffer` with `screenrows` decoded instruction rows.
+- **disassembler** (`disassembler.h`, `disassembler.c`) — wraps Zydis. `disassemble_block(cur_byte)` fills `global_cfg.disassembler_buffer` with up to `screenrows` decoded instruction rows, centering the instruction containing `cur_byte` when enough preceding instructions exist. Decoding uses a bounded lookback and preserves cached instruction boundaries.
 
 ### Runtime loop (`src/main.c`)
 
@@ -78,6 +78,8 @@ The editor is built around a single global `editorConfig global_cfg` (declared i
 The canonical cursor state is `global_cfg.cur_byte` (an absolute byte offset into the mmap). `cx`/`cy` are derived from it via `cur_screencols`. When adding a movement or mode feature, update `cur_byte` and let `switch_mode()` / `get_byte_position()` re-derive the rest; do not maintain `cx`/`cy` independently.
 
 `disassemblerMode` (`REAL`, `MODE_LONG_COMPAT_16/32/64`) is a separate axis that only affects how Zydis decodes instructions; `init_editor()` defaults it to 32-bit.
+
+Page Up/Down moves by `screenrows` instructions in disassembly, preserving the byte offset within the destination instruction where it fits. Text and hex paging moves by `screenrows * cur_screencols` bytes. All modes clamp paging at file boundaries.
 
 ### Rendering invariant
 

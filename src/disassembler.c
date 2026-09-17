@@ -10,6 +10,15 @@
 
 #define DISASSEMBLY_LOOKBACK 128
 
+static ZyanStatus decode_instruction(const ZydisDecoder *decoder, size_t offset,
+                                     size_t anchor, ZydisDecodedInstruction *instruction,
+                                     ZydisDecodedOperand *operands) {
+    /* Do not decode across the start of previously displayed instructions. */
+    size_t length = offset < anchor ? anchor - offset : global_cfg.num_bytes - offset;
+    return ZydisDecoderDecodeFull(decoder, global_cfg.file + offset, length,
+                                 instruction, operands);
+}
+
 void free_disassembler_buffer(void) {
     free(global_cfg.disassembler_buffer);
     global_cfg.disassembler_buffer = NULL;
@@ -20,20 +29,30 @@ int disassemble_block(size_t cur_byte) {
         return EXIT_SUCCESS;
     }
 
+    if (!global_cfg.file || cur_byte >= global_cfg.num_bytes) {
+        memset(global_cfg.disassembler_buffer, 0,
+               global_cfg.screenrows * sizeof(disassemblerRow));
+        return EXIT_SUCCESS;
+    }
+
+    size_t context_rows = global_cfg.screenrows / 2;
+    /* Backward x86 decoding is heuristic. Include enough bytes for full-length
+       instructions above the selection, plus the usual alignment lookback. */
     size_t read_offset = cur_byte > DISASSEMBLY_LOOKBACK
         ? cur_byte - DISASSEMBLY_LOOKBACK : 0;
+    read_offset = context_rows > read_offset / ZYDIS_MAX_INSTRUCTION_LENGTH
+        ? 0 : read_offset - context_rows * ZYDIS_MAX_INSTRUCTION_LENGTH;
+    size_t anchor = global_cfg.num_bytes;
     for (size_t row = 0; row < global_cfg.screenrows; ++row) {
         const disassemblerRow *cached = &global_cfg.disassembler_buffer[row];
-        if (cached->start_byte <= cur_byte && cur_byte < cached->end_byte &&
+        if (cached->start_byte <= cur_byte && read_offset < cached->end_byte &&
+            cached->start_byte < cached->end_byte &&
             cached->end_byte <= global_cfg.num_bytes) {
-            read_offset = cached->start_byte;
+            anchor = cached->start_byte;
+            if (read_offset > anchor)
+                read_offset = anchor;
             break;
         }
-    }
-    memset(global_cfg.disassembler_buffer, 0,
-           global_cfg.screenrows * sizeof(disassemblerRow));
-    if (!global_cfg.file || cur_byte >= global_cfg.num_bytes) {
-        return EXIT_SUCCESS;
     }
 
     ZydisDecoder decoder;
@@ -50,6 +69,27 @@ int disassemble_block(size_t cur_byte) {
         return EXIT_FAILURE;
     }
 
+    /* Use the row buffer as a ring of instruction offsets while finding the
+       selection. Keep only the preceding half-screen and the selected row. */
+    size_t history_rows = context_rows + 1;
+    size_t history_count = 0;
+    size_t history_next = 0;
+    while (read_offset <= cur_byte) {
+        ZydisDecodedInstruction instruction;
+        ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
+        ZyanStatus status = decode_instruction(&decoder, read_offset, anchor,
+                                               &instruction, operands);
+        global_cfg.disassembler_buffer[history_next].start_byte = read_offset;
+        history_next = (history_next + 1) % history_rows;
+        if (history_count < history_rows)
+            history_count++;
+        read_offset += ZYAN_SUCCESS(status) ? instruction.length : 1;
+    }
+    read_offset = global_cfg.disassembler_buffer[
+        history_count == history_rows ? history_next : 0].start_byte;
+    memset(global_cfg.disassembler_buffer, 0,
+           global_cfg.screenrows * sizeof(disassemblerRow));
+
     ZydisFormatter formatter;
     if (!ZYAN_SUCCESS(ZydisFormatterInit(&formatter, ZYDIS_FORMATTER_STYLE_ATT)) ||
         !ZYAN_SUCCESS(ZydisFormatterSetProperty(&formatter,
@@ -65,9 +105,8 @@ int disassemble_block(size_t cur_byte) {
         ZydisDecodedInstruction instruction;
         ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
         char format_buffer[DISASSEMBLED_BUFFER_SIZE];
-        ZyanStatus status = ZydisDecoderDecodeFull(
-            &decoder, global_cfg.file + read_offset,
-            global_cfg.num_bytes - read_offset, &instruction, operands);
+        ZyanStatus status = decode_instruction(&decoder, read_offset, anchor,
+                                               &instruction, operands);
         size_t instruction_length = 1;
 
         if (ZYAN_SUCCESS(status)) {
@@ -85,12 +124,10 @@ int disassemble_block(size_t cur_byte) {
         }
 
         size_t end_byte = read_offset + instruction_length;
-        if (cur_byte < end_byte) {
-            disassemblerRow *row = &global_cfg.disassembler_buffer[output_row++];
-            row->start_byte = read_offset;
-            row->end_byte = end_byte;
-            strcpy(row->diss_str, format_buffer);
-        }
+        disassemblerRow *row = &global_cfg.disassembler_buffer[output_row++];
+        row->start_byte = read_offset;
+        row->end_byte = end_byte;
+        strcpy(row->diss_str, format_buffer);
         read_offset = end_byte;
     }
 
