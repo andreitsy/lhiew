@@ -78,6 +78,8 @@ int editor_read_key(void) {
             (introducer == '[' && !strcmp(seq, "13~"))) return F3_KEY;
         if (introducer == '[') {
             if (!strcmp(seq, "15~")) return F5_KEY;
+            if (!strcmp(seq, "18~")) return F7_KEY;
+            if (!strcmp(seq, "18;2~") || !strcmp(seq, "31~")) return SHIFT_F7;
             if (!strcmp(seq, "19~")) return F8_KEY;
             if (!strcmp(seq, "20~")) return F9_KEY;
             if (!strcmp(seq, "21~")) return F10_KEY;

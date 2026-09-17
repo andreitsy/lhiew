@@ -13,6 +13,8 @@ enum editorKey {
     SHIFT_F1,
     F3_KEY,
     F5_KEY,
+    F7_KEY,
+    SHIFT_F7,
     F8_KEY,
     F9_KEY,
     F10_KEY,

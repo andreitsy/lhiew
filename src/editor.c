@@ -105,6 +105,12 @@ void init_editor(void) {
     global_cfg.executable_choice = 0;
     global_cfg.executable_input_length = 0;
     global_cfg.executable_input[0] = '\0';
+    global_cfg.search_prompt = 0;
+    global_cfg.search_ascii = 0;
+    global_cfg.search_backward = 0;
+    global_cfg.search_input_length = 0;
+    global_cfg.search_input[0] = '\0';
+    global_cfg.search_pattern_length = 0;
     global_cfg.mode = TEXT_MODE;
     global_cfg.cx = 0;
     global_cfg.cy = 0;

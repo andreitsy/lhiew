@@ -72,6 +72,7 @@ The editor is built around a single global `editorConfig global_cfg` (declared i
 - **input** (`input.h`, `input.c`) — `editor_process_keypress` dispatches keys: mode switching (`m` / `Ctrl-M`), disassembler operand-size cycling (`o`), cursor movement via `editor_move_cursor`, quit (`Ctrl-Q`).
 - **render** (`render.h`, `render.c`) — per-mode row drawing (`draw_row_text`, `draw_row_hex`, `draw_row_disassembler`), status/message bars, scrolling, `editor_refresh_screen`.
 - **binary** (`binary.h`, `binary.c`) — bounded ELF, PE/TE, DOS MZ, thin Mach-O and i386 NLM v4 parsing. Distinguishes raw, detected, unsupported and malformed files; supplies entry/first-code offsets and file-region-to-runtime-address mappings without heap allocation. NLM uses file offsets because its load base is not encoded.
+- **search** (`search.h`, `search.c`) — byte and text pattern search over the mapping. `search_compile` turns prompt text into at most `SEARCH_PATTERN_MAX` bytes, rejecting incomplete hexadecimal pairs; `search_find` is a pure forward/backward scan. Both are side-effect free and unit tested. The prompt, repeat and status handling live in the same module and move `cur_byte` through `switch_mode()`.
 - **architecture** (`architecture.h`, `architecture.c`) — named decoder profiles, automatic detection on file read, manual overrides, profile labels, instruction alignment and entry navigation. Static detection metadata is valid only for the currently detected file; `binary_detected` and file identity gate access.
 - **disassembler** (`disassembler.h`, `disassembler.c`) — wraps Zydis/Capstone. `disassemble_block(cur_byte)` fills `global_cfg.disassembler_buffer` with up to `screenrows` rows, centering the instruction containing `cur_byte`. A single forward decoding pass retains preceding rows in a ring, preserving Thumb IT state. Bounded lookback respects cached boundaries, known entry points, instruction alignment and mapped region ends.
 
@@ -144,6 +145,16 @@ Prompts and edit cursors use the normal append-buffer rendering path. When an
 edit-session file conflict is detected, rendering avoids the stale mapping.
 The build requests 64-bit `off_t`; mappings still require enough virtual address
 space, and pending changes require memory proportional to bytes/pages touched.
+
+F7 (or `s` while viewing) opens `search_prompt`. Tab switches between hexadecimal
+pairs and literal text, Ctrl-U clears, and Enter compiles the pattern into
+`search_pattern`/`search_pattern_length` and searches from the cursor. Shift-F7
+repeats in the recorded direction; `n`/`N` repeat forward/backward while viewing
+and set that direction. Repeats start one byte past the cursor so a match already
+under it is not returned again. Search works during an edit session, where it
+reads the private mapping and therefore matches pending changes; `F7` is used
+there because letters are data. A scan is a single uninterruptible pass, so add a
+progress/abort path before relaxing the pattern length or adding wildcards.
 
 ### Rendering invariant
 

@@ -5,6 +5,7 @@
 #include "lhiew/editor.h"
 #include "lhiew/executable_browser.h"
 #include "lhiew/hex_edit.h"
+#include "lhiew/search.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -328,6 +329,9 @@ void editor_draw_message_bar(append_buffer *ab) {
             : "s save | d discard | Esc continue editing";
     } else if (global_cfg.goto_prompt && (!message[0] || time(NULL) - global_cfg.statusmsg_time >= 5)) {
         message = "Enter go | Esc cancel";
+    } else if (global_cfg.search_prompt &&
+               (!message[0] || time(NULL) - global_cfg.statusmsg_time >= 5)) {
+        message = search_prompt_message();
     } else if (global_cfg.executable_browser &&
                (!message[0] || time(NULL) - global_cfg.statusmsg_time >= 5)) {
         message = executable_browser_message();
@@ -338,13 +342,14 @@ void editor_draw_message_bar(append_buffer *ab) {
         strcmp(message, HELLO_MESSAGE) == 0) {
         if (global_cfg.editing) {
             message = global_cfg.screencols < 40 ? "F9 save Tab Esc exit"
-                : "F9 save | Tab HEX/ASCII | F5 goto | Esc/F10 exit | ^Q quit";
+                : "F9 save | Tab HEX/ASCII | F5 goto | F7 find | Esc/F10 exit | ^Q quit";
         } else if (global_cfg.screencols < 40) {
-            message = "^Q quit m F3 edit g goto";
+            message = "^Q quit m F3 edit g goto s find";
         } else if (global_cfg.screencols < 72) {
-            message = "^Q quit | m mode | F3 edit | g goto | a arch";
+            message = "^Q quit | m mode | F3 edit | g goto | s find | a arch";
         } else {
-            message = "^Q quit | m mode | F3 edit | F5/g goto | F8/b imports | a arch | e entry";
+            message = "^Q quit | m mode | F3 edit | F5/g goto | F7/s find n/N next"
+                " | F8/b imports | a arch | e entry";
         }
     }
     append_clipped(ab, message, strlen(message), global_cfg.screencols, 1);
@@ -413,6 +418,8 @@ void editor_draw_screen(append_buffer *ab) {
     int edit_view_valid = 1;
     if (global_cfg.goto_prompt || global_cfg.edit_exit_prompt) {
         draw_edit_prompt(ab);
+    } else if (global_cfg.search_prompt) {
+        search_draw_prompt(ab);
     } else if (global_cfg.executable_browser && !global_cfg.edit_exit_prompt) {
         executable_browser_draw(ab);
     } else if (global_cfg.architecture_menu) {
@@ -436,6 +443,11 @@ void editor_draw_screen(append_buffer *ab) {
     editor_draw_message_bar(ab);
     if (global_cfg.goto_prompt && !global_cfg.edit_exit_prompt) {
         append_position(ab, 2, global_cfg.goto_length + 3);
+        append_to_buffer(ab, "\x1b[?25h", 6);
+    } else if (global_cfg.search_prompt) {
+        size_t column = global_cfg.search_input_length + 3;
+        if (column > global_cfg.screencols) column = global_cfg.screencols;
+        append_position(ab, 2, column);
         append_to_buffer(ab, "\x1b[?25h", 6);
     } else if (global_cfg.executable_browser && !global_cfg.edit_exit_prompt) {
         if (global_cfg.executable_prompt) {

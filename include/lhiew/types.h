@@ -15,9 +15,11 @@
 #define DISASSEMBLED_BUFFER_SIZE 128
 #define SCREENCOLS_MIN     24
 #define SCREENROWS_MIN     5
+/* Longest byte pattern a search accepts; the typed form needs twice the room. */
+#define SEARCH_PATTERN_MAX 64
 
-#define EDITOR_VERSION     "0.0.1"
-#define HELLO_MESSAGE      "Help: Ctrl-q = Quit, Ctrl-m = Prev Mode, m = Next Mode, o - Next OpSize"
+#define EDITOR_VERSION     "0.0.2"
+#define HELLO_MESSAGE      "Help: Ctrl-q = Quit, m = Next Mode, F3 = Edit, F5 = Goto, F7 = Find"
 #define TEXT_MODE_STR      "Text Mode"
 #define HEX_MODE_STR       "Hex Mode"
 #define DISASSEMBLER_MODE_STR "Disassembler Mode"
@@ -112,6 +114,13 @@ typedef struct editorConfig {
     size_t            executable_choice;
     size_t            executable_input_length;
     char              executable_input[256];
+    int               search_prompt;
+    int               search_ascii;
+    int               search_backward;
+    size_t            search_input_length;
+    char              search_input[2 * SEARCH_PATTERN_MAX + 1];
+    uint8_t           search_pattern[SEARCH_PATTERN_MAX];
+    size_t            search_pattern_length;
     uint8_t          *file;
     time_t            statusmsg_time;
     FILE             *fp;
