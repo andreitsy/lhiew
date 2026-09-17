@@ -56,3 +56,6 @@ dkms.conf
 # Build trees
 build/
 cmake-build-debug
+
+# Python terminal-test bytecode
+__pycache__/
