@@ -486,6 +486,49 @@ static int detect_fat(const uint8_t *data, size_t size, binaryInfo *info, uint32
     return 1; /* A universal binary needs an explicit slice selection. */
 }
 
+static int detect_nlm(const uint8_t *data, size_t size, binaryInfo *info) {
+    info->format = BINARY_FORMAT_NLM;
+    if (size < 24) return 0;
+    if (memcmp(data, "NetWare Loadable Module\x1a", 24)) return 1;
+    if (size < 130) return 0;
+    if (read32(data + 24, 0) != 4) return 1;
+    if (!data[28] || data[28] > 12 || data[29 + data[28]] ||
+        memchr(data + 29, 0, data[28])) return 0;
+    size_t header_end = 130;
+    const size_t maximum[] = {127, 71, 17};
+    for (size_t i = 0; i < 3; ++i) {
+        if (!span(size, header_end, 1)) return 0;
+        size_t length = data[header_end++];
+        if (length > maximum[i] || !span(size, header_end, length + 1) ||
+            data[header_end + length]) return 0;
+        header_end += length + 1;
+        if (!i) {
+            if (!span(size, header_end, 14)) return 0;
+            header_end += 14;
+        }
+    }
+    info->data_offset = read32(data + 42, 0);
+    info->data_size = read32(data + 46, 0);
+    info->table_offset = read32(data + 50, 0);
+    info->table_count = read32(data + 54, 0);
+    if (!span(size, info->data_offset, info->data_size) ||
+        !span(size, info->table_offset, info->table_count)) return 0;
+    if ((info->data_size && info->data_offset < header_end) ||
+        (info->table_count && info->table_offset < header_end) ||
+        (info->data_size && info->table_count &&
+         info->data_offset < info->table_offset + info->table_count &&
+         info->table_offset < info->data_offset + info->data_size)) return 0;
+    uint32_t entry = read32(data + 110, 0);
+    if (info->data_size ? entry >= info->data_size : entry != 0) return 0;
+    set_architecture(info, ARCH_X86, 0);
+    info->architecture.x86_mode = MODE_LONG_COMPAT_32;
+    if (info->data_size) {
+        info->has_entry = 1;
+        info->entry_offset = info->data_offset + entry;
+    }
+    return 1;
+}
+
 void binary_detect(const uint8_t *data, size_t size, binaryInfo *info) {
     if (!info) return;
     memset(info, 0, sizeof(*info));
@@ -493,6 +536,7 @@ void binary_detect(const uint8_t *data, size_t size, binaryInfo *info) {
     if (!data || !size) return;
     int valid = 1;
     if (size >= 4 && !memcmp(data, "\x7f" "ELF", 4)) valid = detect_elf(data, size, info);
+    else if (size >= 8 && !memcmp(data, "NetWare ", 8)) valid = detect_nlm(data, size, info);
     else if (size >= 2 && data[0] == 'M' && data[1] == 'Z') valid = detect_mz(data, size, info);
     else if (size >= 2 && data[0] == 'V' && data[1] == 'Z') valid = detect_te(data, size, info);
     else if (size >= 4) {
@@ -588,6 +632,19 @@ int binary_region_at(const uint8_t *data, size_t size, const binaryInfo *info,
         if (set_region(size, info->data_offset, info->data_size, 0, 1, &candidate) && contains(&candidate, offset)) {
             return finish_region(data, size, info, offset, candidate, region);
         }
+    } else if (info->format == BINARY_FORMAT_NLM) {
+        /* NLM load bases are supplied by the runtime; display file-relative
+           addresses while keeping code/data decoding within their image spans. */
+        if (set_region(size, info->data_offset, info->data_size, info->data_offset, 1, &candidate) &&
+            contains(&candidate, offset)) {
+            *region = candidate;
+            return 1;
+        }
+        if (set_region(size, info->table_offset, info->table_count, info->table_offset, 0, &candidate) &&
+            contains(&candidate, offset)) {
+            *region = candidate;
+            return 1;
+        }
     } else if (info->format == BINARY_FORMAT_MACHO) {
         int be = info->container_big_endian;
         /* Prefer sections, then segments, without retaining pointers to file bytes. */
@@ -628,6 +685,7 @@ const char *binary_format_name(binaryFormat format) {
         case BINARY_FORMAT_NE: return "NE";
         case BINARY_FORMAT_LE: return "LE";
         case BINARY_FORMAT_LX: return "LX";
+        case BINARY_FORMAT_NLM: return "NLM";
         default: return "Raw";
     }
 }

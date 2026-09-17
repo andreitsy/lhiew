@@ -99,6 +99,12 @@ void init_editor(void) {
     global_cfg.goto_prompt = 0;
     global_cfg.goto_length = 0;
     global_cfg.goto_input[0] = '\0';
+    global_cfg.executable_browser = 0;
+    global_cfg.executable_prompt = 0;
+    global_cfg.executable_imports = 1;
+    global_cfg.executable_choice = 0;
+    global_cfg.executable_input_length = 0;
+    global_cfg.executable_input[0] = '\0';
     global_cfg.mode = TEXT_MODE;
     global_cfg.cx = 0;
     global_cfg.cy = 0;

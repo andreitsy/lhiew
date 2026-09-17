@@ -81,8 +81,12 @@ static void cleanup(void) {
     free(global_cfg.disassembler_buffer);
     if (test_fd >= 0)
         close(test_fd);
-    if (test_path[0])
+    if (test_path[0]) {
+        char backup[96];
+        snprintf(backup, sizeof(backup), "%s.backup", test_path);
+        unlink(backup);
         unlink(test_path);
+    }
     test_fd = -1;
     test_path[0] = '\0';
     RESET_GLOBAL_CFG();
@@ -377,6 +381,61 @@ static void test_sparse_file_edit_beyond_four_gib(void) {
     ASSERT((uint64_t)st.st_blocks * 512 < UINT64_C(16) * 1024 * 1024);
 }
 
+static void test_backup_precedes_edits_and_survives_save(void) {
+    const uint8_t bytes[] = {0x11, 0x22, 0x33};
+    ASSERT(open_bytes(bytes, sizeof(bytes)));
+    ASSERT(hex_edit_begin());
+    char backup[96];
+    snprintf(backup, sizeof(backup), "%s.backup", test_path);
+    int fd = open(backup, O_RDONLY);
+    ASSERT(fd >= 0);
+    uint8_t saved[sizeof(bytes)];
+    ASSERT_EQ(read(fd, saved, sizeof(saved)), (ssize_t)sizeof(saved));
+    ASSERT_EQ(memcmp(bytes, saved, sizeof(bytes)), 0);
+    ASSERT(hex_edit_set_byte(1, 0xaa));
+    ASSERT(hex_edit_save());
+    ASSERT_EQ(pread(fd, saved, sizeof(saved), 0), (ssize_t)sizeof(saved));
+    ASSERT_EQ(memcmp(bytes, saved, sizeof(bytes)), 0);
+    close(fd);
+}
+
+static void test_failed_backup_refuses_editing_without_mutation(void) {
+    const uint8_t bytes[] = {0x11, 0x22};
+    ASSERT(open_bytes(bytes, sizeof(bytes)));
+    char backup[96];
+    snprintf(backup, sizeof(backup), "%s.backup", test_path);
+    ASSERT_EQ(mkdir(backup, 0700), 0);
+    ASSERT(!hex_edit_begin());
+    ASSERT(!global_cfg.editing);
+    ASSERT_EQ(hex_edit_dirty_count(), 0u);
+    ASSERT_EQ(memcmp(global_cfg.file, bytes, sizeof(bytes)), 0);
+    ASSERT_EQ(disk_byte(0), 0x11);
+    ASSERT_EQ(write_calls, 0);
+    ASSERT_EQ(rmdir(backup), 0);
+}
+
+static void test_multi_field_patch_is_atomic_on_invalid_span_and_allocation_failure(void) {
+    const uint8_t bytes[] = {1, 2, 3, 4};
+    const uint8_t replacements[] = {8, 9};
+    ASSERT(open_bytes(bytes, sizeof(bytes)));
+    ASSERT(hex_edit_begin());
+    hexPatch patches[] = {{0, replacements, 2}, {3, replacements, 2}};
+    ASSERT(!hex_edit_patch(patches, 2));
+    ASSERT_EQ(memcmp(global_cfg.file, bytes, sizeof(bytes)), 0);
+    ASSERT_EQ(hex_edit_dirty_count(), 0u);
+    patches[1].offset = 2;
+    fail_allocation = 1;
+    ASSERT(!hex_edit_patch(patches, 2));
+    ASSERT_EQ(memcmp(global_cfg.file, bytes, sizeof(bytes)), 0);
+    ASSERT_EQ(hex_edit_dirty_count(), 0u);
+    fail_allocation = 0;
+    ASSERT(hex_edit_patch(patches, 2));
+    ASSERT_EQ(global_cfg.file[0], 8);
+    ASSERT_EQ(global_cfg.file[3], 9);
+    ASSERT_EQ(hex_edit_dirty_count(), 4u);
+    ASSERT_EQ(disk_byte(0), 1);
+}
+
 int main(void) {
     printf("test_hex_edit:\n");
     RUN_TEST(test_private_edits_save_only_changed_bytes);
@@ -393,6 +452,9 @@ int main(void) {
     RUN_TEST(test_interrupted_io_retries_and_short_io_fails);
     RUN_TEST(test_save_refreshes_detection_and_preserves_manual_profile);
     RUN_TEST(test_sparse_file_edit_beyond_four_gib);
+    RUN_TEST(test_backup_precedes_edits_and_survives_save);
+    RUN_TEST(test_failed_backup_refuses_editing_without_mutation);
+    RUN_TEST(test_multi_field_patch_is_atomic_on_invalid_span_and_allocation_failure);
     cleanup();
     TEST_REPORT();
 }

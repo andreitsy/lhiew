@@ -4,7 +4,7 @@ Linux terminal binary viewer and hex editor inspired by [Hiew](https://www.hiew.
 with text, hex and multiarchitecture disassembly views.
 
 
-[![license](https://img.shields.io/github/license/dec0dOS/amazing-github-template.svg?style=flat-square)](src/LICENSE)
+[![license](https://img.shields.io/github/license/dec0dOS/amazing-github-template.svg?style=flat-square)](LICENSE)
 
 </div>
 
@@ -30,7 +30,8 @@ with text, hex and multiarchitecture disassembly views.
 **LHiew** views binary files and overwrites existing bytes through hex or ASCII
 input. Changes stay private until explicitly saved. It detects CPU architecture
 from supported executable headers and displays assembly using Zydis for x86
-(AT&T syntax) and Capstone for other CPUs.
+(AT&T syntax) and Capstone for other CPUs. An executable browser exposes
+PE, NE, LE, LX and i386 NLM headers/regions and existing import names/ordinals.
 
 
 ## Getting Started
@@ -64,10 +65,34 @@ Editing overwrites bytes without changing file length. There is no application
 file-size cap, but the file must fit the platform's file-offset types and virtual
 address space. Only changed bytes are written on save. Nonempty regular files
 must be writable to enter editing; read-only files can still be viewed.
+Before enabling edits, LHiew creates **`<filename>.backup`**. The first backup is
+preserved across saves and later sessions; it is never replaced automatically.
+Backup failure blocks editing. Sparse files are copied without allocating the
+whole file in memory.
 
 Insertion/deletion, file creation, an assembler, and general undo are not
 implemented. See the [editing walkthrough, save behavior, and limits](docs/hex-editing.md),
 including the mapping to the historical Hiew workflow.
+
+#### Browse and edit executable imports
+
+Press **F8** (or **`b`** while viewing) to open imports. **Tab** switches between
+imports and headers/regions. Arrows and Page Up/Down move the selection;
+**Enter** opens the selected record's bytes in hex view.
+
+Select an editable module, function name or ordinal and press **F3**. **Ctrl-U**
+clears the current value; enter its replacement and press **Enter** to stage it.
+Names must keep their original byte length, and ordinals must fit their existing
+field. **F9** saves; **Escape** closes the browser, preserving pending edits.
+The ordinary editor's save/discard prompt still applies when leaving editing.
+
+Support covers standard **PE32/PE32+** imports, **NE/LE/LX** import fixups and
+primary **i386 NLM v4** external references. Bound PE imports and LE/LX imports
+with fixup checksums are browse-only. Adding imports, resizing tables, exports,
+PE delay-import decoding and automatic checksum/signature repair remain outside
+this feature. See the [format coverage and workflow](docs/executable-imports.md).
+
+![Executable import browser](pics/import-browser.png)
 
 #### Terminal sizes
 
@@ -90,12 +115,13 @@ by one screen of instructions; text and hex modes move by one screen of rows.
 
 #### Architectures and executable files
 
-Open an ELF, PE/PE32+, TE, DOS MZ or thin Mach-O file and switch to disassembly
+Open an ELF, PE/PE32+, TE, DOS MZ, i386 NLM v4 or thin Mach-O file and switch to disassembly
 with `m` twice or `Ctrl-M`. From offset zero, the view moves to the detected
 entry point, or the first executable region when no mapped entry is available.
 Press `e` to return there. Decoders receive mapped runtime addresses; native
 relative operand syntax (such as RISC-V branch displacements) is preserved.
 The left column and cursor still use file offsets.
+NLM has runtime-assigned load bases, so its decoder addresses remain file offsets.
 
 The main desktop/mobile targets are **x86 16/32/64, ARM/Thumb, AArch64, and
 RISC-V 32/64**, including compressed RISC-V instructions. Additional profiles
@@ -111,8 +137,9 @@ choice for other CPUs; changing the architecture preserves the selected byte.
 
 ![Architecture selection menu](pics/architecture-menu.png)
 
-Support is limited to the listed decoder profiles. Universal Mach-O, NE/LE/LX,
-hybrid PE machine types and unsupported CPUs are identified but require further
+Support is limited to the listed decoder profiles. NE/LE/LX have the import and
+header browser above, but still need manual architecture selection for decoding.
+Universal Mach-O, hybrid PE machine types and unsupported CPUs need further
 support; malformed headers are reported. Mixed ARM/Thumb code may need manual
 selection. Architecture selection changes decoding; it does not assemble
 instruction text. Existing instruction bytes can be patched in the hex editor.
@@ -123,8 +150,9 @@ and the updated [feature comparison](FEATURES.md).
 #### Tests and sample binaries
 
 After building, run `ctest --test-dir build --output-on-failure`. Unit tests cover
-file loading, hex editing and saving, disassembly, rendering, cursor boundaries,
-and resizing. Sparse-file editing checks exercise offsets beyond 4 GiB. When
+file loading, backups, hex/import editing and saving, executable tables,
+disassembly, rendering, cursor boundaries, and resizing. Sparse-file editing and
+backup checks exercise offsets beyond 4 GiB. When
 Python 3 is available, CTest also verifies the binary fixtures and drives the
 application through a pseudo-terminal to test live resizing and keyboard input.
 
@@ -150,6 +178,7 @@ For an automatically detected example, open
 | `F3`               | Enter hex editing from any view        |
 | `F5`               | Goto absolute hexadecimal file offset  |
 | `g`                | Goto offset while viewing              |
+| `F8`, view-mode `b` | Open executable imports/header browser |
 | `Tab`              | Switch hex/ASCII input while editing   |
 | `F9`               | Save changed bytes; remain editing     |
 | `Escape`, `F10`    | Leave editing; prompt if unsaved        |
@@ -168,6 +197,8 @@ For an automatically detected example, open
 The `h/j/k/l` movement keys and architecture/view shortcuts apply while viewing.
 Printable characters are input while editing. At the unsaved-edits prompt,
 `s` saves, `d` discards pending changes, and Escape returns to editing.
+Within the executable browser, Tab changes the table, F3 edits the selected
+import, Enter jumps to its bytes, and Escape returns to the underlying view.
 
 Supported x86 decoding modes are:
 - 64 bit mode;
@@ -199,7 +230,7 @@ ctest --test-dir build --output-on-failure
 
 This project is licensed under the **MIT license**. Feel free to edit and distribute this template as you like.
 
-See [LICENSE](src/LICENSE) for more information.
+See [LICENSE](LICENSE) for more information.
 
 ## Acknowledgements
 

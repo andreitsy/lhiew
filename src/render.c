@@ -3,6 +3,7 @@
 #include "lhiew/architecture.h"
 #include "lhiew/disassembler.h"
 #include "lhiew/editor.h"
+#include "lhiew/executable_browser.h"
 #include "lhiew/hex_edit.h"
 
 #include <stdarg.h>
@@ -327,6 +328,9 @@ void editor_draw_message_bar(append_buffer *ab) {
             : "s save | d discard | Esc continue editing";
     } else if (global_cfg.goto_prompt && (!message[0] || time(NULL) - global_cfg.statusmsg_time >= 5)) {
         message = "Enter go | Esc cancel";
+    } else if (global_cfg.executable_browser &&
+               (!message[0] || time(NULL) - global_cfg.statusmsg_time >= 5)) {
+        message = executable_browser_message();
     } else if (global_cfg.architecture_menu) {
         message = global_cfg.screencols < 64 ? "Enter apply | Esc cancel"
             : "Up/Down j/k | PgUp/PgDn | Enter apply | Esc cancel | Ctrl-Q quit";
@@ -340,7 +344,7 @@ void editor_draw_message_bar(append_buffer *ab) {
         } else if (global_cfg.screencols < 72) {
             message = "^Q quit | m mode | F3 edit | g goto | a arch";
         } else {
-            message = "^Q quit | m mode | F3 edit | F5/g goto | a arch | e entry | o x86 size";
+            message = "^Q quit | m mode | F3 edit | F5/g goto | F8/b imports | a arch | e entry";
         }
     }
     append_clipped(ab, message, strlen(message), global_cfg.screencols, 1);
@@ -409,6 +413,8 @@ void editor_draw_screen(append_buffer *ab) {
     int edit_view_valid = 1;
     if (global_cfg.goto_prompt || global_cfg.edit_exit_prompt) {
         draw_edit_prompt(ab);
+    } else if (global_cfg.executable_browser && !global_cfg.edit_exit_prompt) {
+        executable_browser_draw(ab);
     } else if (global_cfg.architecture_menu) {
         draw_architecture_menu(ab);
     } else if (global_cfg.editing && !(edit_view_valid = hex_edit_check_file())) {
@@ -431,6 +437,15 @@ void editor_draw_screen(append_buffer *ab) {
     if (global_cfg.goto_prompt && !global_cfg.edit_exit_prompt) {
         append_position(ab, 2, global_cfg.goto_length + 3);
         append_to_buffer(ab, "\x1b[?25h", 6);
+    } else if (global_cfg.executable_browser && !global_cfg.edit_exit_prompt) {
+        if (global_cfg.executable_prompt) {
+            size_t column = global_cfg.executable_input_length + 3;
+            if (column > global_cfg.screencols) column = global_cfg.screencols;
+            append_position(ab, 2, column);
+            append_to_buffer(ab, "\x1b[?25h", 6);
+        } else {
+            append_position(ab, 1, 1);
+        }
     } else if (global_cfg.editing && edit_view_valid && !global_cfg.edit_exit_prompt &&
                global_cfg.cur_byte < global_cfg.num_bytes) {
         size_t col = global_cfg.edit_ascii

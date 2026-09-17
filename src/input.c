@@ -3,6 +3,7 @@
 #include "lhiew/architecture.h"
 #include "lhiew/disassembler.h"
 #include "lhiew/editor.h"
+#include "lhiew/executable_browser.h"
 #include "lhiew/hex_edit.h"
 #include "lhiew/render.h"
 #include "lhiew/terminal.h"
@@ -332,6 +333,9 @@ static void edit_keypress(int key) {
         case F5_KEY:
             open_goto_prompt();
             return;
+        case F8_KEY:
+            executable_browser_open();
+            return;
         case '\t':
             global_cfg.edit_ascii = !global_cfg.edit_ascii;
             global_cfg.edit_nibble = 0;
@@ -399,6 +403,10 @@ void editor_process_keypress(void) {
         goto_keypress(c);
         return;
     }
+    if (global_cfg.executable_browser) {
+        executable_browser_keypress(c);
+        return;
+    }
     if (global_cfg.editing) {
         edit_keypress(c);
         return;
@@ -408,6 +416,10 @@ void editor_process_keypress(void) {
         return;
     }
     switch (c) {
+        case F8_KEY:
+        case 'b':
+            executable_browser_open();
+            break;
         case F3_KEY:
             if (hex_edit_begin()) {
                 global_cfg.edit_ascii = 0;

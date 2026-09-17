@@ -20,6 +20,7 @@ typedef enum binaryFormat {
     BINARY_FORMAT_NE,
     BINARY_FORMAT_LE,
     BINARY_FORMAT_LX,
+    BINARY_FORMAT_NLM,
 } binaryFormat;
 
 typedef struct binaryRegion {

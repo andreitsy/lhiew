@@ -28,15 +28,17 @@ with limits on ISA revisions and executable variants. See the
 | Large files | Advertised unlimited-size viewing/editing | Demand-paged viewing/overwrite editing with no application size cap; whole-file mapping and platform limits apply |
 | Assembler | Built-in assembly/patching | No assembly-text input; instruction bytes can be patched in the hex editor |
 | Physical / logical drives | View and edit | Unsupported; nonregular files are rejected |
-| Executable containers | NE, LE, LX, PE/PE32+, ELF/ELF64, Mach-O, TE | Detects ELF32/64, PE32/PE32+, TE, DOS MZ, thin Mach-O32/64; selected others explicitly unsupported |
+| Executable containers | NE, LE, LX, PE/PE32+, ELF/ELF64, Mach-O, TE | Automatic CPU detection for ELF, PE/TE, MZ, thin Mach-O and i386 NLM v4; header/import browser for PE/NE/LE/LX/NLM |
 | Files open at once | Multiple files and history | One file from `argv[1]` |
 | Addressing | File offsets and virtual-address navigation | File-offset cursor/gutter and absolute hex goto; decoders receive mapped runtime addresses; no VA goto |
 | Extensibility | HEM plugins, macros, Crypt interpreter | None |
 
 LHiew combines byte-overwrite editing with architecture selection, executable
-header detection, file-offset/entry navigation, and mapped disassembly addresses.
-Insertion/deletion, assembly-text input, search, virtual-address goto, symbols,
-and a header browser remain gaps. See the [editing workflow](docs/hex-editing.md).
+header/import browsing, file-offset/entry navigation, and mapped disassembly
+addresses. Existing import names/ordinals can be edited in place, with an
+automatic original-file backup. Insertion/deletion, assembly-text input, search,
+virtual-address goto and general symbol/export browsing remain gaps. See the
+[editing workflow](docs/hex-editing.md) and [import workflow](docs/executable-imports.md).
 
 ## Product-level capabilities
 
@@ -45,7 +47,7 @@ and a header browser remain gaps. See the [editing workflow](docs/hex-editing.md
 | View and edit large files in text, hex, and code views | ⚠️ | Hex/ASCII overwrite editing reached from any view; no insertion/deletion, assembly input, or sliding mapping window |
 | x86-64 disassembler and assembler, including AVX-family encodings | ⚠️ | Decoding through bundled Zydis; no assembler; no claim of exhaustive instruction validation |
 | Physical and logical drive view/edit | ❌ | Regular files only |
-| Executable-format support | ⚠️ | CPU detection, mapped regions, and entry navigation for supported containers; no header/import/export UI |
+| Executable-format support | ⚠️ | CPU detection/mapping for supported containers; PE/NE/LE/LX/NLM header/region/import browser and existing-name/ordinal edits; no export browser or table rebuilding |
 
 ### 1. Large-file viewing and editing
 
@@ -73,8 +75,11 @@ viewable without entering this editor.
 Save verifies file identity/metadata, writes changed bytes, and flushes them.
 It is not atomic: failed writes or flushing may leave partial changes on disk.
 Pending changes remain after failure; discard reloads disk contents rather than
-rolling back completed writes. General undo, automatic backups, insertion,
-deletion, and resizing remain absent. Dirty pages/change records also consume
+rolling back completed writes. Before entering editing, LHiew creates
+`<filename>.backup`; the first independent regular backup is preserved across
+saves and later sessions. Backup failures block editing. Sparse copies use
+bounded memory, but copying nonsparse data takes time and disk space. General
+undo, insertion, deletion, and resizing remain absent. Dirty pages/change records also consume
 memory as more bytes are edited. See [save behavior and limits](docs/hex-editing.md#storage-conflicts-and-limits).
 
 ### 2. Disassembly, architectures, and assembly
@@ -139,14 +144,22 @@ profiles and exposes region mappings to the disassembler.
 | Container | Current behavior | Remaining limits |
 |---|---|---|
 | ELF32 / ELF64 | Detect CPU/mode/byte order; parse program/section mappings; resolve entry or an executable region | No symbols, relocation application, or header browser; selected mixed-mode variants unsupported |
-| PE32 / PE32+ | Detect COFF machine; parse sections/image base; map entry RVA to file offset | No imports/exports UI; ARM64EC/ARM64X hybrid decoding unsupported |
+| PE32 / PE32+ | Detect machine/mappings/entry; browse header, sections and standard imports; edit existing module/function names and ordinals | Bound imports browse-only; no delay-import decoding, exports or table rebuilding; ARM64EC/ARM64X hybrid decoding unsupported |
 | TE | Detect machine and map sections/entry with stripped-header adjustment | No firmware-volume or UEFI metadata browser |
 | Thin Mach-O32 / Mach-O64 | Detect CPU/byte order; map sections/segments and LC_MAIN entry | No full LC_UNIXTHREAD entry decoder or symbol browser; executable-region fallback where available |
 | DOS MZ | Select real-16 and resolve header/CS:IP entry | No DOS loader emulation or relocation application |
 | Universal Mach-O | Recognize and validate slice table, report unsupported | No slice chooser or per-slice state |
-| NE / LE / LX | Recognize as unsupported | No executable mapping or decoding-mode inference for these formats |
+| NE / LE / LX | Browse headers, segment/object records, module names and imported name/ordinal fixups; edit existing fields | No automatic decoding-mode/address mapping; no compressed-page expansion or entry-table forwarders; LE/LX fixup checksums make imports read-only |
 | Raw binaries / unrecognized containers | Permit byte viewing and manual ISA selection | No reliable automatic CPU identification or load-address mapping |
-| NLM | No dedicated recognition; handled as unrecognized input | No NLM loader metadata, entry, or address mapping |
+| NLM | i386 v4 x86-32 detection, entry and code/data bounds; primary dependency/global-import browser and exact-length name edits | Runtime addresses unknown, so decoder uses file offsets; other CPUs/versions and shared-image import extensions unsupported |
+
+F8 (or view-mode `b`) opens the executable browser. Tab selects imports or
+headers/regions, Enter jumps to the selected file record, F3 edits an existing
+name/ordinal, and F9 saves. Names retain their byte length and ordinals their
+field width; PE lookup/address ordinal fields are updated together where safe.
+Malformed or incomplete results disable structured edits. No imports are added
+or removed, and no checksums or executable signatures are regenerated. See the
+[format coverage and limits](docs/executable-imports.md#format-coverage).
 
 Entering assembly view from file offset zero jumps to the mapped entry, or to
 the first file-backed executable region when the parser supplies that fallback.
@@ -175,12 +188,15 @@ need separate handling. See [explicit limits and follow-up work](docs/architectu
 | Switch Hex / Text / Code view | `Enter`, `F4` menu | `m` next, `Ctrl-M` previous | While viewing; no view-picker menu |
 | Edit existing bytes | `F3` | `F3`, hex digits, `Tab` for ASCII | Enters hex editing from any view; overwrite only |
 | Save changes | `F9` in editor | `F9` | Saves changed bytes and remains editing |
+| Preserve original bytes | — | Automatic before F3 edits | First `<filename>.backup` retained across sessions; failure blocks editing |
+| Browse executable headers/imports | `F8` | `F8`, or view-mode `b` | PE/NE/LE/LX/i386 NLM v4; Tab changes table, Enter opens bytes |
+| Edit existing import fields | Within executable UI | Browser `F3`, then Enter | Exact-length names and existing-width ordinals; F9 saves |
 | Leave editor | context-dependent | `Esc` or `F10` | Remains in hex view; unsaved changes prompt save/discard/continue |
 | Goto file offset | `F5` | `F5`, or `g` while viewing | Absolute hexadecimal file offsets only |
 | Row/file boundaries | `Home`/`End`, `Ctrl-Home`/`Ctrl-End` | same | First/last byte in row or file |
 | Change x86 opcode size | `Ctrl-F1` | `o` | real-16, protected-16, 32, 64; sets a manual architecture choice |
 | Choose architecture | `Shift-F1` | `Shift-F1` or `a` | Auto plus 32 manual profiles; supported terminal sequence variants |
-| Open entry location | Within executable header UI | `e` | Detected entry or executable-region fallback; no header UI |
+| Open entry location | Within executable header UI | `e` | Detected entry or executable-region fallback; separate from browser record jumps |
 | Cursor movement | arrows | arrows; `h/j/k/l` while viewing | Printable keys become input while editing |
 | Page up/down | `PgUp` / `PgDn` | `PgUp` / `PgDn` | Instruction-aware paging in code view |
 | Hex dump with ASCII pane | — | built-in | Offset, hex, ASCII, and selected-byte highlight |
@@ -231,7 +247,7 @@ missing.
 | `+` `-` `Alt--` `Alt-0` `Alt-1..8` | Bookmark stack | ❌ |
 | `Ctrl-.` / `Ctrl-0..8` | Record/play macros | ❌ |
 | `;` | Comment current location | ❌ |
-| `F12` / `Shift-F12` | Names window; name locations; import/export symbols | ❌ |
+| `F12` / `Shift-F12` | Names window; name locations; import/export symbols | ⚠️ F8 browses stored import names/ordinals; no general names window, user labels or exports |
 | `Enter`, `F4` | Cycle or pick view mode | ⚠️ cycling via `m`/`Ctrl-M`; no view-picker menu |
 | `Esc` | Exit without touching timestamp | ⚠️ Esc cancels prompts or leaves editing; Ctrl-Q quits; saving writes file contents rather than promising timestamp preservation |
 | `Tab`, `Ctrl-BkSp`, `Ctrl-F11`/`F12`, `F9` | File history/manager, next/previous argument, open file | ❌; one `argv[1]` file |
@@ -242,12 +258,14 @@ missing.
 
 ## Category 3 — Features specific to executables
 
-CPU selection, container detection, entry navigation, and mapped instruction
-addresses are implemented. Header editing and higher-level analysis are not.
+CPU selection, container detection, entry navigation, mapped instruction
+addresses and a bounded executable browser are implemented. Structured editing
+is limited to existing import names/ordinals; broader header editing and analysis
+remain absent.
 
 | Key | Feature | Status |
 |---|---|---|
-| `F8` | Header viewer/editor with entry, section, import, and export navigation | ⚠️ detection/mapping and `e` entry shortcut; no `F8` UI, section browser, imports, or exports |
+| `F8` | Header viewer/editor with entry, section, import, and export navigation | ⚠️ F8/b browser exposes PE/NE/LE/LX/NLM header/region/import records and existing import-field editing; `e` reaches detected entry; no exports or general header editor |
 | `1`–`9`, `A` | Follow branch/call targets and show direction markers | ❌; mapped operand text does not provide navigation |
 | `/` | Re-synchronize disassembly from cursor | ⚠️ bounded lookback, cached boundaries, and ISA alignment; no forced-resync command |
 | `Ctrl-F1` | Cycle opcode size | ✅ equivalent `o` for x86 |
@@ -260,7 +278,8 @@ addresses are implemented. Header editing and higher-level analysis are not.
 
 Opening a file for viewing does not require write access. F3 verifies/reopens the
 same nonempty regular file for writing and enters hex editing. Pending bytes
-stay private until explicit save. The [editing guide](docs/hex-editing.md) gives
+stay private until explicit save. A first `.backup` is secured before edit mode
+and retained across later sessions. The [editing guide](docs/hex-editing.md) gives
 a reproducible walkthrough and identifies which historical actions remain absent.
 
 | Key | Feature | Status |
@@ -272,6 +291,7 @@ a reproducible walkthrough and identifies which historical actions remain absent
 | `Ins` | Insert versus overwrite | ❌ |
 | — | Inline assembler: instruction text to patched bytes | ❌ |
 | — | Discard pending edits / general undo | ⚠️ discard all pending changes; no per-edit undo history or rollback of completed disk writes |
+| — | Automatic original-file backup | ✅ creates `<filename>.backup` before editing; never replaces an existing independent regular backup; no built-in restore command |
 
 ## Historical additions: Hiew 6.03
 
@@ -280,7 +300,9 @@ The following inventory comes from the
 LHiew statuses were checked against [`main.c`](src/main.c),
 [`input.c`](src/input.c), [`editor.c`](src/editor.c),
 [`render.c`](src/render.c), [`binary.c`](src/binary.c), and
-[`file_buffer.c`](src/file_buffer.c). These rows expand the existing categories;
+[`file_buffer.c`](src/file_buffer.c), [`executable_browser.c`](src/executable_browser.c),
+the format parsers, [`hex_edit.c`](src/hex_edit.c), and
+[`file_backup.c`](src/file_backup.c). These rows expand the existing categories;
 they are not additional completed features or a shortcut count.
 
 | Hiew 6.03 capability | LHiew status / remaining work |
@@ -295,10 +317,10 @@ they are not additional completed features or a shortcut count.
 | Session persistence; `/SAV` | ❌ Mode, cursor, bookmarks, and file history are not saved across launches |
 | Startup preferences; `/INI` | ❌ No option/configuration parser; initial view is fixed to text |
 | Manual rebasing; `Ctrl-F5` | ❌ Header mappings exist, but raw firmware/ROM users cannot set a load address or a cursor-relative origin |
-| NLM recognition | ❌ No NLM-specific parser; byte inspection remains available |
-| Import/ordinal annotations | ❌ No API/DLL names or ordinal-name database in disassembly; CPU decoding alone does not resolve imports |
+| NLM recognition | ⚠️ primary i386 v4 image, entry/code/data and global imports; other NLM variants unsupported |
+| Import/ordinal annotations | ⚠️ stored module/function names and ordinals appear in the executable browser; no import annotation in disassembly or ordinal-name database |
 | VxD/VMM annotations | ❌ No service-call interpretation or service-name tables; generic x86 decoding cannot supply these semantics |
-| PE directories/flags | ❌ No data-directory navigation or decoded flag panel; existing section mappings are internal |
+| PE directories/flags | ⚠️ header summary, section RVA/size/raw flags and standard imports are visible; delay imports have raw-directory navigation; no complete directory/decoded-flag editor |
 | MZ overlays/header maintenance | ❌ No overlay navigation or header repair; current MZ support detects mode and maps the load module/entry |
 | Instruction patterns: `?`, `;`, `;;` | ❌ No decoded-instruction pattern matcher; this needs separate design from byte/string search |
 | Byte/instruction scan steps | ❌ No search/xref engine or selectable scan policy; normal row decoding is not an equivalent |
@@ -324,7 +346,8 @@ they are not treated as verified shortcuts here.
 This comparison records capabilities and gaps, not a requirement to reproduce
 old DOS behavior, file formats, reported defects, or editing constraints.
 The current overwrite editor provides explicit save/discard handling, but no
-general undo or atomic recovery. Its [workflow map](docs/hex-editing.md#relationship-to-the-hiew-603-article)
+general undo or atomic recovery. A retained first `.backup` protects original
+bytes. Its [workflow map](docs/hex-editing.md#relationship-to-the-hiew-603-article)
 separates reachable editing actions from unrelated missing features. Future
 address/search work should use validated container mappings rather than adopting
 the article's example calculations as a parser specification.
@@ -345,10 +368,11 @@ overwrite workflow before adding less common CPU families.
    behavior for large mapped files and encoding choices. Plan instruction-pattern
    matching, byte/instruction scan policy, block scope, and an independent repeat
    position as separate capabilities.
-4. **Header and region browser.** Expose parsed headers, entry, sections/segments,
-   and mapping information. Parsing exists; UI and broader format handling remain.
-   Symbols, imports, exports, and relocations need their own parsing/navigation;
-   resolved import names should also be available in disassembly.
+4. **Extend executable browsing.** PE/NE/LE/LX/NLM header/import browsing and
+   existing-field edits now exist. Add ELF/Mach-O/TE panels, exports, delay/shared
+   import variants, full directory/flag views and broader mapping support.
+   Import annotations in disassembly, checksum repair and table rebuilding need
+   separate implementations.
 5. **Branch following and explicit resynchronization.** Preserve target metadata,
    map targets back to file offsets, and add jump history. Account for indirect
    branches and instruction-mode changes; formatted operands alone are not enough.
@@ -361,7 +385,8 @@ overwrite workflow before adding less common CPU families.
 8. **Device and mapping-window support.** Add platform-specific read-only device
    access if needed and sliding mappings for files that cannot fit one mapping.
 9. **Extend editing and add assembly.** Overwrite, explicit save, and whole-pending
-   discard now exist. Add general undo, stronger save recovery, insertion/deletion,
+   discard and retained original-file backups now exist. Add general undo,
+   stronger save recovery, insertion/deletion,
    and resizing before connecting an encoder to an instruction-input UI. New-file
    creation and data-transform tools also remain separate work.
 
@@ -386,6 +411,16 @@ overwrite workflow before adding less common CPU families.
   [`tests/test_hex_editor.py`](tests/test_hex_editor.py) check explicit
   save/discard, conflicts and failures, reachable editing controls, and sparse-file
   overwrites beyond 4 GiB; see [editing verification](docs/hex-editing.md#verification).
+- [`tests/test_file_backup.c`](tests/test_file_backup.c) checks exact contents,
+  retained first backups, alias rejection, failed-copy cleanup and sparse copying
+  beyond 4 GiB.
+- [`tests/test_executable_pe.c`](tests/test_executable_pe.c),
+  [`tests/test_executable_ne.c`](tests/test_executable_ne.c),
+  [`tests/test_executable_linear.c`](tests/test_executable_linear.c) and
+  [`tests/test_executable_nlm.c`](tests/test_executable_nlm.c) cover serialized
+  import records, boundaries, field spans, encodings and unsupported cases.
+  The [executable guide](docs/executable-imports.md#fixtures-and-verification)
+  describes generated examples and terminal workflow coverage.
 
 These are targeted regressions using bounded fixtures. They do not establish
 complete ISA/container coverage, all-file-size support, or full Hiew editing

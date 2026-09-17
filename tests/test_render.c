@@ -42,6 +42,7 @@ static void teardown(void) {
     free(global_cfg.filename);
     global_cfg.filename = NULL;
     unlink(TMP_FILE);
+    unlink("/tmp/lhiew_test_render.bin.backup");
 }
 
 static char *plain_output(const append_buffer *ab) {
