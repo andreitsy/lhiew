@@ -74,6 +74,21 @@ int editor_read_key(void) {
         if (introducer == '[' &&
             (!strcmp(seq, "1;2P") || !strcmp(seq, "23~") || !strcmp(seq, "11;2~")))
             return SHIFT_F1;
+        if ((introducer == 'O' && !strcmp(seq, "R")) ||
+            (introducer == '[' && !strcmp(seq, "13~"))) return F3_KEY;
+        if (introducer == '[') {
+            if (!strcmp(seq, "15~")) return F5_KEY;
+            if (!strcmp(seq, "20~")) return F9_KEY;
+            if (!strcmp(seq, "21~")) return F10_KEY;
+            if (!strcmp(seq, "1;5H") || !strcmp(seq, "1;5~") ||
+                !strcmp(seq, "7;5~")) return CTRL_HOME;
+            if (!strcmp(seq, "1;5F") || !strcmp(seq, "4;5~") ||
+                !strcmp(seq, "8;5~")) return CTRL_END;
+            if (!strcmp(seq, "1~") || !strcmp(seq, "7~")) return HOME_KEY;
+            if (!strcmp(seq, "4~") || !strcmp(seq, "8~")) return END_KEY;
+        }
+        if (!strcmp(seq, "H")) return HOME_KEY;
+        if (!strcmp(seq, "F")) return END_KEY;
         if (!strcmp(seq, "3~")) return DEL_KEY;
         if (!strcmp(seq, "5~")) return PAGE_UP;
         if (!strcmp(seq, "6~")) return PAGE_DOWN;

@@ -4,8 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-LHiew is a Linux terminal binary viewer inspired by Hiew. It views files in text,
-hex, or disassembly modes. It is a C17 program built with CMake that uses raw-mode
+LHiew is a Linux terminal binary viewer and hex editor inspired by Hiew. It views
+files in text, hex, or disassembly modes and can overwrite existing bytes. It is
+a C17 program built with CMake that uses raw-mode
 termios I/O (no curses). Zydis handles x86 with AT&T syntax; Capstone 5.0.9 handles
 the other supported CPUs. See `docs/architectures.md` for the support matrix,
 design, source specifications, and limits.
@@ -62,7 +63,8 @@ The editor is built around a single global `editorConfig global_cfg` (declared i
 - **types** (`types.h`, `types.c`) — all type definitions (`editorConfig`, `editorMode`, `disassemblerMode`, `disassemblerRow`, `editorRow`), constants, and the `global_cfg` definition.
 - **append_buffer** (`append_buffer.h`, `append_buffer.c`) — growable byte buffer used to assemble a full screen frame before a single `write()`.
 - **terminal** (`terminal.h`, `terminal.c`) — termios raw-mode setup/teardown, escape-sequence key decoder (arrows, PgUp/PgDn, Del), window-size detection, `die_safely`.
-- **file_buffer** (`file_buffer.h`, `file_buffer.c`) — file open and read-only `mmap` into `global_cfg.file`. The editor never copies file contents.
+- **file_buffer** (`file_buffer.h`, `file_buffer.c`) — regular-file open, checked file-size conversion and read-only private `mmap` into `global_cfg.file`. Reload replaces the mapping without copying the whole file.
+- **hex_edit** (`hex_edit.h`, `hex_edit.c`) — writable reopen with file identity checks, private copy-on-write editing and a sparse sorted list of changed bytes. Saves verify file identity/version and expected original bytes, then use `pwrite` and `fsync`; failed saves retain pending records. Discard remaps the originally opened file. See `docs/hex-editing.md` for limits and failure semantics.
 - **editor** (`editor.h`, `editor.c`) — `init_editor` lifecycle, `switch_mode` (recomputes `cx`/`cy`/`numrows` from `cur_byte`), `get_row_len`.
 - **input** (`input.h`, `input.c`) — `editor_process_keypress` dispatches keys: mode switching (`m` / `Ctrl-M`), disassembler operand-size cycling (`o`), cursor movement via `editor_move_cursor`, quit (`Ctrl-Q`).
 - **render** (`render.h`, `render.c`) — per-mode row drawing (`draw_row_text`, `draw_row_hex`, `draw_row_disassembler`), status/message bars, scrolling, `editor_refresh_screen`.
@@ -105,6 +107,23 @@ No relocations, symbols, universal-binary slices, or mixed ARM mapping symbols
 are applied. Changing a decode profile does not claim to translate file content.
 
 Page Up/Down moves by `screenrows` instructions in disassembly, preserving the byte offset within the destination instruction where it fits. Text and hex paging moves by `screenrows * cur_screencols` bytes. All modes clamp paging at file boundaries.
+
+F3 enters hex editing from any view. `editing`, `edit_ascii` and `edit_nibble`
+track the edit session, input pane and nibble. Each typed digit updates the
+private mapped byte immediately; after two digits the cursor advances. Tab
+switches to printable ASCII. F9 saves; Escape/F10 leaves edit mode. Leaving or
+quitting with pending changes opens `edit_exit_prompt` (1 = leave, 2 = quit):
+`s` saves, `d` discards, Escape continues. Mode/architecture shortcuts are
+inactive while editing so letters remain data. Editing never resizes the file.
+
+F5 (or `g` while viewing) opens `goto_prompt`; `goto_input`/`goto_length` hold an
+absolute hexadecimal file offset, with optional `0x`. Parsing checks overflow
+and file bounds. Home/End select row boundaries; Ctrl-Home/End select the first
+and last bytes. One-past-EOF is a valid viewing cursor but cannot be edited.
+Prompts and edit cursors use the normal append-buffer rendering path. When an
+edit-session file conflict is detected, rendering avoids the stale mapping.
+The build requests 64-bit `off_t`; mappings still require enough virtual address
+space, and pending changes require memory proportional to bytes/pages touched.
 
 ### Rendering invariant
 

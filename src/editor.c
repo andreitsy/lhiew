@@ -92,6 +92,13 @@ void init_editor(void) {
     global_cfg.architecture_menu = 0;
     global_cfg.architecture_choice = 0;
     global_cfg.binary_detected = 0;
+    global_cfg.editing = 0;
+    global_cfg.edit_ascii = 0;
+    global_cfg.edit_nibble = 0;
+    global_cfg.edit_exit_prompt = 0;
+    global_cfg.goto_prompt = 0;
+    global_cfg.goto_length = 0;
+    global_cfg.goto_input[0] = '\0';
     global_cfg.mode = TEXT_MODE;
     global_cfg.cx = 0;
     global_cfg.cy = 0;

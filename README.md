@@ -1,7 +1,7 @@
 # LHiew
 
-Linux terminal binary viewer inspired by [Hiew](https://www.hiew.ru/), with text,
-hex and multiarchitecture disassembly views.
+Linux terminal binary viewer and hex editor inspired by [Hiew](https://www.hiew.ru/),
+with text, hex and multiarchitecture disassembly views.
 
 
 [![license](https://img.shields.io/github/license/dec0dOS/amazing-github-template.svg?style=flat-square)](src/LICENSE)
@@ -27,9 +27,10 @@ hex and multiarchitecture disassembly views.
 ---
 
 ## About
-**LHiew** is a read-only console binary viewer. It detects CPU architecture from
-supported executable headers and displays assembly using Zydis for x86 (AT&T
-syntax) and Capstone for other CPUs.
+**LHiew** views binary files and overwrites existing bytes through hex or ASCII
+input. Changes stay private until explicitly saved. It detects CPU architecture
+from supported executable headers and displays assembly using Zydis for x86
+(AT&T syntax) and Capstone for other CPUs.
 
 
 ## Getting Started
@@ -45,12 +46,35 @@ lhiew ./a.out
 
 ![image](pics/example.png)
 
+#### Edit existing bytes
+
+Press **F3** from any view to enter the hex editor. Press **F5**, enter an absolute
+**hexadecimal file offset**, and press Enter to jump there. Type two hex digits
+per byte; **Tab** switches between hex and printable ASCII input. Use arrows,
+Page Up/Down, Home/End, or Ctrl-Home/Ctrl-End to navigate while editing.
+
+**F9** saves changed bytes and keeps the editor open. **Escape/F10** leave editing
+in hex view; **Ctrl-Q** quits. With unsaved changes, choose **`s` save**, **`d`
+discard**, or **Escape continue**. While editing, printable keys are file input;
+leave the editor before using view shortcuts such as `m` or `a`.
+
+![Hex editor with pending hexadecimal and ASCII changes](pics/hex-editor.png)
+
+Editing overwrites bytes without changing file length. There is no application
+file-size cap, but the file must fit the platform's file-offset types and virtual
+address space. Only changed bytes are written on save. Nonempty regular files
+must be writable to enter editing; read-only files can still be viewed.
+
+Insertion/deletion, file creation, an assembler, and general undo are not
+implemented. See the [editing walkthrough, save behavior, and limits](docs/hex-editing.md),
+including the mapping to the historical Hiew workflow.
+
 #### Terminal sizes
 
 LHiew follows the terminal's current width and height and redraws automatically
 when you resize it, preserving the selected byte. The minimum usable size is
 **24 columns by 5 rows**. Smaller windows show a resize message; enlarge the
-window to resume, or press `Ctrl-q` to quit.
+window to resume. `Ctrl-q` quits, with an unsaved-changes prompt when needed.
 
 Text wraps to the available width. Hex mode adjusts the number of bytes per
 row and keeps offsets, hex values, and ASCII aligned. Narrow disassembly views
@@ -90,14 +114,17 @@ choice for other CPUs; changing the architecture preserves the selected byte.
 Support is limited to the listed decoder profiles. Universal Mach-O, NE/LE/LX,
 hybrid PE machine types and unsupported CPUs are identified but require further
 support; malformed headers are reported. Mixed ARM/Thumb code may need manual
-selection. This feature does not assemble or edit instructions. See the
+selection. Architecture selection changes decoding; it does not assemble
+instruction text. Existing instruction bytes can be patched in the hex editor.
+See the
 [architecture analysis, implementation plan and limitations](docs/architectures.md)
 and the updated [feature comparison](FEATURES.md).
 
 #### Tests and sample binaries
 
 After building, run `ctest --test-dir build --output-on-failure`. Unit tests cover
-file loading, disassembly, rendering, cursor boundaries, and resizing. When
+file loading, hex editing and saving, disassembly, rendering, cursor boundaries,
+and resizing. Sparse-file editing checks exercise offsets beyond 4 GiB. When
 Python 3 is available, CTest also verifies the binary fixtures and drives the
 application through a pseudo-terminal to test live resizing and keyboard input.
 
@@ -117,18 +144,30 @@ For an automatically detected example, open
 
 | Key Combination    | Action                                 |
 |--------------------|----------------------------------------|
-| `Ctrl-q`           | Quit                                   |
-| `Ctrl-m`           | Toggle previous mode                   |
-| `m`                | Toggle next mode                       |
+| `Ctrl-q`           | Quit; prompt if edits are unsaved      |
+| `Ctrl-m`           | Previous view outside editing          |
+| `m`                | Next view outside editing              |
+| `F3`               | Enter hex editing from any view        |
+| `F5`               | Goto absolute hexadecimal file offset  |
+| `g`                | Goto offset while viewing              |
+| `Tab`              | Switch hex/ASCII input while editing   |
+| `F9`               | Save changed bytes; remain editing     |
+| `Escape`, `F10`    | Leave editing; prompt if unsaved        |
 | `o`                | Cycle x86 decoding mode                |
 | `Shift-F1`, `a`    | Select architecture or restore Auto    |
 | `e`                | View entry / first executable region   |
-| `h`, `Left Arrow`  | Move cursor left                       |
-| `k`, `Up Arrow`    | Move cursor up                         |
-| `j`, `Down Arrow`  | Move cursor down                       |
-| `l`, `Right Arrow` | Move cursor right                      |
+| `Left Arrow`       | Move cursor left                       |
+| `Up Arrow`         | Move cursor up                         |
+| `Down Arrow`       | Move cursor down                       |
+| `Right Arrow`      | Move cursor right                      |
 | `PgUp`             | Move up one screen                     |
 | `PgDn`             | Move down one screen                   |
+| `Home`, `End`      | First/last byte in current row          |
+| `Ctrl-Home`, `Ctrl-End` | First/last existing file byte      |
+
+The `h/j/k/l` movement keys and architecture/view shortcuts apply while viewing.
+Printable characters are input while editing. At the unsaved-edits prompt,
+`s` saves, `d` discards pending changes, and Escape returns to editing.
 
 Supported x86 decoding modes are:
 - 64 bit mode;

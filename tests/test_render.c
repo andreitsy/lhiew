@@ -2,6 +2,7 @@
 #include "test_harness.h"
 #include "lhiew/append_buffer.h"
 #include "lhiew/editor.h"
+#include "lhiew/hex_edit.h"
 #include "lhiew/render.h"
 
 #include <sys/mman.h>
@@ -420,6 +421,51 @@ static void test_status_and_messages_sanitize_control_bytes(void) {
     teardown();
 }
 
+static void test_edit_cursor_and_prompts_fit_after_resize(void) {
+    const char data[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    setup_file_data(data, sizeof(data) - 1);
+    global_cfg.mode = HEX_MODE;
+    ASSERT(hex_edit_begin());
+    const size_t widths[] = {24, 31, 40, 80, 120};
+    for (size_t i = 0; i < sizeof(widths) / sizeof(widths[0]); ++i) {
+        global_cfg.cur_byte = sizeof(data) - 2;
+        editor_resize(5, widths[i]);
+        for (int pane = 0; pane < 3; ++pane) {
+            global_cfg.edit_ascii = pane == 2;
+            global_cfg.edit_nibble = pane == 1;
+            append_buffer frame = ABUF_INIT;
+            editor_draw_screen(&frame);
+            ASSERT(frame_fits(&frame, 5, widths[i]));
+            free_append_buffer(&frame);
+        }
+        /* Prompts must fit even the minimum supported screen and a full
+           machine-width offset must remain visible while being entered. */
+        global_cfg.goto_prompt = 1;
+        snprintf(global_cfg.goto_input, sizeof(global_cfg.goto_input), "0x%zx", SIZE_MAX);
+        global_cfg.goto_length = strlen(global_cfg.goto_input);
+        append_buffer ab = ABUF_INIT;
+        editor_draw_screen(&ab);
+        ASSERT(frame_fits(&ab, 5, widths[i]));
+        char *plain = plain_output(&ab);
+        ASSERT(strstr(plain, global_cfg.goto_input) != NULL);
+        free(plain);
+        free_append_buffer(&ab);
+        global_cfg.goto_prompt = 0;
+        global_cfg.edit_exit_prompt = 1;
+        editor_draw_screen(&ab);
+        ASSERT(frame_fits(&ab, 5, widths[i]));
+        plain = plain_output(&ab);
+        ASSERT(strstr(plain, "Unsaved changes") != NULL);
+        ASSERT(strstr(plain, "s save d discard") != NULL ||
+               strstr(plain, "s save | d discard") != NULL);
+        free(plain);
+        free_append_buffer(&ab);
+        global_cfg.edit_exit_prompt = 0;
+    }
+    hex_edit_cancel();
+    teardown();
+}
+
 int main(void) {
     printf("test_render:\n");
     RUN_TEST(test_get_byte_position_origin);
@@ -438,5 +484,6 @@ int main(void) {
     RUN_TEST(test_tiny_window_message_and_recovery);
     RUN_TEST(test_empty_and_eof_frames_fit);
     RUN_TEST(test_status_and_messages_sanitize_control_bytes);
+    RUN_TEST(test_edit_cursor_and_prompts_fit_after_resize);
     TEST_REPORT();
 }

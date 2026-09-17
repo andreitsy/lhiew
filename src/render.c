@@ -3,6 +3,7 @@
 #include "lhiew/architecture.h"
 #include "lhiew/disassembler.h"
 #include "lhiew/editor.h"
+#include "lhiew/hex_edit.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -241,11 +242,39 @@ static void draw_architecture_menu(append_buffer *ab) {
     }
 }
 
+static void draw_edit_prompt(append_buffer *ab) {
+    for (size_t y = 0; y < global_cfg.screenrows; ++y) {
+        char line[96] = "";
+        if (global_cfg.edit_exit_prompt) {
+            if (!y)
+                snprintf(line, sizeof(line), "Unsaved changes");
+            else if (y == 1)
+                snprintf(line, sizeof(line), "s Save and %s",
+                         global_cfg.edit_exit_prompt == 2 ? "quit" : "leave edit mode");
+            else if (y == 2)
+                snprintf(line, sizeof(line), "d Discard unsaved changes");
+        } else {
+            if (!y)
+                snprintf(line, sizeof(line), "Go to file offset (hex)");
+            else if (y == 1)
+                snprintf(line, sizeof(line), "> %s", global_cfg.goto_input);
+            else if (y == 2)
+                snprintf(line, sizeof(line), "Range: 0..%zx", global_cfg.num_bytes);
+        }
+        append_to_buffer(ab, "\x1b[K", 3);
+        append_clipped(ab, line, strlen(line), global_cfg.screencols, 1);
+        append_to_buffer(ab, "\r\n", 2);
+    }
+}
+
 void editor_draw_status_bar(append_buffer *ab) {
     size_t width = global_cfg.screencols;
     char mode[48], status[160];
     int compact = width < 64;
-    if (global_cfg.mode == DISASSEMBLER_MODE && global_cfg.architecture != ARCH_X86) {
+    if (global_cfg.editing) {
+        snprintf(mode, sizeof(mode), "EDIT %s%s", global_cfg.edit_ascii ? "ASCII" : "HEX",
+                 hex_edit_dirty_count() ? "*" : "");
+    } else if (global_cfg.mode == DISASSEMBLER_MODE && global_cfg.architecture != ARCH_X86) {
         snprintf(mode, sizeof(mode), "ASM %s", architecture_current_name());
     } else if (global_cfg.mode == DISASSEMBLER_MODE) {
         const char *bits = "32";
@@ -293,17 +322,25 @@ void editor_draw_status_bar(append_buffer *ab) {
 void editor_draw_message_bar(append_buffer *ab) {
     append_to_buffer(ab, "\x1b[K", 3);
     const char *message = global_cfg.statusmsg;
-    if (global_cfg.architecture_menu) {
+    if (global_cfg.edit_exit_prompt) {
+        message = global_cfg.screencols < 40 ? "s save d discard Esc stay"
+            : "s save | d discard | Esc continue editing";
+    } else if (global_cfg.goto_prompt && (!message[0] || time(NULL) - global_cfg.statusmsg_time >= 5)) {
+        message = "Enter go | Esc cancel";
+    } else if (global_cfg.architecture_menu) {
         message = global_cfg.screencols < 64 ? "Enter apply | Esc cancel"
             : "Up/Down j/k | PgUp/PgDn | Enter apply | Esc cancel | Ctrl-Q quit";
     } else if (!message[0] || time(NULL) - global_cfg.statusmsg_time >= 5 ||
         strcmp(message, HELLO_MESSAGE) == 0) {
-        if (global_cfg.screencols < 40) {
-            message = "^Q quit m a:arch e:entry";
+        if (global_cfg.editing) {
+            message = global_cfg.screencols < 40 ? "F9 save Tab Esc exit"
+                : "F9 save | Tab HEX/ASCII | F5 goto | Esc/F10 exit | ^Q quit";
+        } else if (global_cfg.screencols < 40) {
+            message = "^Q quit m F3 edit g goto";
         } else if (global_cfg.screencols < 72) {
-            message = "^Q quit | m mode | a arch | e entry";
+            message = "^Q quit | m mode | F3 edit | g goto | a arch";
         } else {
-            message = "^Q quit | m/^M mode | a/Shift-F1 arch | e entry | o x86 size";
+            message = "^Q quit | m mode | F3 edit | F5/g goto | a arch | e entry | o x86 size";
         }
     }
     append_clipped(ab, message, strlen(message), global_cfg.screencols, 1);
@@ -360,18 +397,49 @@ void editor_draw_screen(append_buffer *ab) {
     append_to_buffer(ab, "\x1b[?25l\x1b[H", 9);
     if (global_cfg.window_too_small) {
         draw_resize_message(ab);
+        if (global_cfg.edit_exit_prompt && global_cfg.terminal_rows && global_cfg.screencols) {
+            append_position(ab, 1, 1);
+            append_to_buffer(ab, "\x1b[K", 3);
+            const char *message = "s save d discard Esc stay";
+            append_clipped(ab, message, strlen(message), global_cfg.screencols, 1);
+        }
         append_position(ab, 1, 1);
         return;
     }
-    if (global_cfg.architecture_menu) {
+    int edit_view_valid = 1;
+    if (global_cfg.goto_prompt || global_cfg.edit_exit_prompt) {
+        draw_edit_prompt(ab);
+    } else if (global_cfg.architecture_menu) {
         draw_architecture_menu(ab);
+    } else if (global_cfg.editing && !(edit_view_valid = hex_edit_check_file())) {
+        /* A truncated file can invalidate mapped pages; keep the error and
+           exit controls visible without reading the old mapping. */
+        for (size_t y = 0; y < global_cfg.screenrows; ++y) {
+            append_to_buffer(ab, "\x1b[K", 3);
+            if (!y) {
+                const char *message = "File changed; Esc to leave editing";
+                append_clipped(ab, message, strlen(message), global_cfg.screencols, 1);
+            }
+            append_to_buffer(ab, "\r\n", 2);
+        }
     } else {
         editor_scroll();
         editor_draw_rows(ab);
     }
     editor_draw_status_bar(ab);
     editor_draw_message_bar(ab);
-    if (!global_cfg.architecture_menu && global_cfg.mode == TEXT_MODE &&
+    if (global_cfg.goto_prompt && !global_cfg.edit_exit_prompt) {
+        append_position(ab, 2, global_cfg.goto_length + 3);
+        append_to_buffer(ab, "\x1b[?25h", 6);
+    } else if (global_cfg.editing && edit_view_valid && !global_cfg.edit_exit_prompt &&
+               global_cfg.cur_byte < global_cfg.num_bytes) {
+        size_t col = global_cfg.edit_ascii
+            ? editor_offset_width() + 5 + 3 * global_cfg.cur_screencols + global_cfg.cx
+            : editor_offset_width() + 3 + 3 * global_cfg.cx + (size_t)global_cfg.edit_nibble;
+        append_position(ab, global_cfg.cy - global_cfg.rowoff + 1, col);
+        append_to_buffer(ab, "\x1b[?25h", 6);
+    } else if (!global_cfg.architecture_menu && !global_cfg.edit_exit_prompt &&
+        global_cfg.mode == TEXT_MODE &&
         global_cfg.screenrows && global_cfg.screencols) {
         size_t cursor_row = global_cfg.cy - global_cfg.rowoff;
         size_t cursor_col = global_cfg.rx;

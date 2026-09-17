@@ -99,6 +99,13 @@ typedef struct editorConfig {
     int               architecture_menu;
     size_t            architecture_choice;
     int               binary_detected;
+    int               editing;
+    int               edit_ascii;
+    int               edit_nibble;
+    int               edit_exit_prompt;
+    int               goto_prompt;
+    size_t            goto_length;
+    char              goto_input[2 * sizeof(size_t) + 3];
     uint8_t          *file;
     time_t            statusmsg_time;
     FILE             *fp;
