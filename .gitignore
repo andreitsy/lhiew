@@ -6,6 +6,7 @@
 *.ko
 *.obj
 *.elf
+!tests/fixtures/minimal_exit_x86_64.elf
 
 # Linker output
 *.ilk

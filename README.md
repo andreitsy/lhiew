@@ -42,6 +42,31 @@ lhiew ./a.out
 
 ![image](pics/example.png)
 
+#### Terminal sizes
+
+LHiew follows the terminal's current width and height and redraws automatically
+when you resize it, preserving the selected byte. The minimum usable size is
+**24 columns by 5 rows**. Smaller windows show a resize message; enlarge the
+window to resume, or press `Ctrl-q` to quit.
+
+Text wraps to the available width. Hex mode adjusts the number of bytes per
+row and keeps offsets, hex values, and ASCII aligned. Narrow disassembly views
+prioritize offsets and instructions, adding the raw instruction bytes when
+space permits. Long instructions are marked with `~` when truncated.
+The status and help bars also adapt to the available width.
+
+#### Tests and sample binaries
+
+After building, run `ctest --test-dir build --output-on-failure`. Unit tests cover
+file loading, disassembly, rendering, cursor boundaries, and resizing. When
+Python 3 is available, CTest also verifies the binary fixtures and drives the
+application through a pseudo-terminal to test live resizing and keyboard input.
+
+The reproducible [binary fixtures](tests/fixtures/README.md) include 16-, 32-,
+and 64-bit x86 code, a minimal Linux ELF executable, and empty or malformed
+instruction streams. For example, open `./build/lhiew tests/fixtures/raw_x86_64.bin`,
+press `m` twice for disassembly, then `o` once to select 64-bit decoding.
+
 
 
 #### Keybindings

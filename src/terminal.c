@@ -1,5 +1,6 @@
-#include "lhiew/terminal.h"
 #include "lhiew/types.h"
+#include "lhiew/terminal.h"
+#include "lhiew/editor.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -17,9 +18,8 @@ void die_safely(const char *s) {
 void disable_raw_mode(void) {
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &global_cfg.orig_termios) == -1)
         die_safely("tcsetattr");
-    if (global_cfg.mode == DISASSEMBLER_MODE) {
-        printf("\x1b[?25h");
-    }
+    /* Compact/too-small views also hide the cursor. Always restore it. */
+    write(STDOUT_FILENO, "\x1b[m\x1b[?25h", 9);
     if (global_cfg.fp != NULL)
         fclose(global_cfg.fp);
 }
@@ -43,8 +43,11 @@ int editor_read_key(void) {
     ssize_t nread;
     char c;
     while ((nread = read(STDIN_FILENO, &c, 1)) != 1) {
-        if (nread == -1 && errno != EAGAIN)
+        if (nread == -1 && errno != EAGAIN && errno != EINTR)
             die_safely("read");
+        /* VTIME wakes us every 100 ms, including while no keys are pressed. */
+        if (editor_update_window_size())
+            return 0;
     }
     if (c == '\x1b') {
         char seq[3];
@@ -75,7 +78,7 @@ int editor_read_key(void) {
 }
 
 int get_cursor_position(size_t *rows, size_t *cols) {
-    char buf[32];
+    char buf[32] = {0};
     unsigned int i = 0;
     while (i < sizeof(buf) - 1) {
         if (read(STDIN_FILENO, &buf[i], 1) != 1) break;
@@ -91,10 +94,10 @@ int get_cursor_position(size_t *rows, size_t *cols) {
 
 int get_window_size(size_t *rows, size_t *cols) {
     struct winsize ws;
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0) {
-        if (write(STDOUT_FILENO, "\x1b[999C\x1b[999B", 12) != 12)
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 &&
+        ioctl(STDIN_FILENO, TIOCGWINSZ, &ws) == -1) {
+        if (write(STDOUT_FILENO, "\x1b[999C\x1b[999B\x1b[6n", 16) != 16)
             return -1;
-        editor_read_key();
         return get_cursor_position(rows, cols);
     }
     *cols = ws.ws_col;

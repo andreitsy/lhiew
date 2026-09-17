@@ -1,247 +1,346 @@
+#include "lhiew/types.h"
 #include "lhiew/render.h"
 #include "lhiew/disassembler.h"
 #include "lhiew/editor.h"
-#include "lhiew/types.h"
 
-#include <ctype.h>
 #include <stdarg.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
+static void append_spaces(append_buffer *ab, size_t count) {
+    static const char spaces[] = "                                                                ";
+    while (count) {
+        size_t len = count < sizeof(spaces) - 1 ? count : sizeof(spaces) - 1;
+        append_to_buffer(ab, spaces, len);
+        count -= len;
+    }
+}
+
+/* Render one terminal cell per byte, regardless of locale or file contents. */
+static char printable_byte(uint8_t byte) {
+    if (byte >= 32 && byte < 127)
+        return (char)byte;
+    if (byte < 32 || byte == 127)
+        return byte <= 26 ? '.' : '@';
+    return '?';
+}
+
+static void append_clipped(append_buffer *ab, const char *text, size_t len,
+                           size_t width, int mark_truncation) {
+    size_t count = len < width ? len : width;
+    for (size_t i = 0; i < count; ++i) {
+        char byte = mark_truncation && len > width && i + 1 == width
+            ? '~' : printable_byte((uint8_t)text[i]);
+        append_to_buffer(ab, &byte, 1);
+    }
+}
+
+static void append_position(append_buffer *ab, size_t row, size_t col) {
+    char position[64];
+    int len = snprintf(position, sizeof(position), "\x1b[%zu;%zuH", row, col);
+    append_to_buffer(ab, position, (size_t)len);
+}
+
+static size_t displayed_row_length(size_t y, size_t *start) {
+    size_t columns = global_cfg.cur_screencols;
+    if (!columns || !global_cfg.file || y > SIZE_MAX - global_cfg.rowoff)
+        return 0;
+    size_t row = y + global_cfg.rowoff;
+    if (row > global_cfg.num_bytes / columns)
+        return 0;
+    *start = row * columns;
+    size_t remaining = global_cfg.num_bytes - *start;
+    return remaining < columns ? remaining : columns;
+}
+
 size_t get_byte_position(void) {
-    size_t cur_pos = global_cfg.cx + global_cfg.cur_screencols * global_cfg.cy;
-    return cur_pos > global_cfg.num_bytes ? global_cfg.num_bytes : cur_pos;
+    if (global_cfg.cur_screencols &&
+        global_cfg.cy > global_cfg.num_bytes / global_cfg.cur_screencols)
+        return global_cfg.num_bytes;
+    size_t start = global_cfg.cur_screencols * global_cfg.cy;
+    if (global_cfg.cx > global_cfg.num_bytes - start)
+        return global_cfg.num_bytes;
+    return start + global_cfg.cx;
 }
 
 void draw_row_text(size_t y, append_buffer *ab) {
-    size_t len = get_row_len();
-    size_t filerow = y + global_cfg.rowoff;
-    char *c = (char *)&global_cfg.file[filerow * global_cfg.cur_screencols];
-    for (size_t j = 0; j < len; j++) {
-        if (isprint(c[j])) {
-            append_to_buffer(ab, &c[j], 1);
-        } else {
-            if (iscntrl(c[j])) {
-                char sym = (c[j] <= 26) ? '.' : '@';
-                append_to_buffer(ab, &sym, 1);
-            } else {
-                append_to_buffer(ab, "?", 1);
-            }
-        }
-    }
+    size_t start = 0;
+    size_t len = displayed_row_length(y, &start);
+    if (len)
+        append_clipped(ab, (const char *)&global_cfg.file[start], len,
+                       global_cfg.screencols, 0);
 }
 
 void draw_row_hex(size_t y, append_buffer *ab) {
-    char *str_tmp = NULL;
-    int cursor_pos = 0;
-    size_t len = get_row_len();
-    size_t filerow = y + global_cfg.rowoff;
-    uint8_t *b = &global_cfg.file[filerow * global_cfg.cur_screencols];
-    append_to_buffer(ab, "|", 1);
-    for (size_t j = 0; j < len; j++) {
-        if (global_cfg.cy == filerow && global_cfg.cx == j) {
-            cursor_pos = 1;
-        } else {
-            cursor_pos = 0;
-        }
-        if (j && j % 4 == 0) {
-            append_to_buffer(ab, " ", 1);
-        }
-        append_to_buffer(ab, " ", 1);
-        str_tmp = (char *)malloc(5 * sizeof(char));
-        snprintf(str_tmp, 4, "%02x", b[j]);
-        if (cursor_pos) {
-            append_to_buffer(ab, "\x1b[7m", 4);
-        }
-        append_to_buffer(ab, str_tmp, 3);
-        if (cursor_pos) {
-            append_to_buffer(ab, "\x1b[m", 3);
-        }
-        free(str_tmp);
+    size_t start = 0;
+    size_t len = displayed_row_length(y, &start);
+    if (!len) {
+        if (global_cfg.screencols)
+            append_to_buffer(ab, "~", 1);
+        return;
     }
-    str_tmp = (char *)malloc(12 * sizeof(char));
-    snprintf(str_tmp, 12, " |%08zx0", filerow);
-    append_to_buffer(ab, str_tmp, 12);
-    free(str_tmp);
+
+    size_t offset_width = editor_offset_width();
+    if (global_cfg.screencols < offset_width + 9)
+        return;
+    size_t columns = (global_cfg.screencols - offset_width - 5) / 4;
+    if (columns > global_cfg.cur_screencols)
+        columns = global_cfg.cur_screencols;
+    if (len > columns)
+        len = columns;
+    char offset[2 * sizeof(size_t) + 1];
+    snprintf(offset, sizeof(offset), "%0*zx", (int)offset_width, start);
+    append_to_buffer(ab, offset, strlen(offset));
+    append_to_buffer(ab, "  ", 2);
+
+    for (size_t j = 0; j < columns; ++j) {
+        if (j < len) {
+            char hex[3];
+            snprintf(hex, sizeof(hex), "%02x", global_cfg.file[start + j]);
+            int selected = start + j == global_cfg.cur_byte;
+            if (selected)
+                append_to_buffer(ab, "\x1b[7m", 4);
+            append_to_buffer(ab, hex, 2);
+            if (selected)
+                append_to_buffer(ab, "\x1b[m", 3);
+            append_to_buffer(ab, " ", 1);
+        } else {
+            append_spaces(ab, 3);
+        }
+    }
+    append_to_buffer(ab, " |", 2);
+    for (size_t j = 0; j < columns; ++j) {
+        char byte = j < len ? printable_byte(global_cfg.file[start + j]) : ' ';
+        int selected = j < len && start + j == global_cfg.cur_byte;
+        if (selected)
+            append_to_buffer(ab, "\x1b[7m", 4);
+        append_to_buffer(ab, &byte, 1);
+        if (selected)
+            append_to_buffer(ab, "\x1b[m", 3);
+    }
+    append_to_buffer(ab, "|", 1);
 }
 
 void draw_row_disassembler(size_t y, append_buffer *ab) {
-    size_t diss_len = strlen(global_cfg.disassembler_buffer[y].diss_str);
-    size_t padding = global_cfg.cur_screencols;
-    size_t start = global_cfg.disassembler_buffer[y].start_byte;
-    char buf[12] = "";
-    padding -= sprintf(buf, "%09zx| ", start);
-    append_to_buffer(ab, buf, 12);
-    for (size_t i = start; i < start + 16; i++) {
-        if (i == global_cfg.cur_byte) {
-            append_to_buffer(ab, "\x1b[7m", 4);
-        }
-        if (i < global_cfg.disassembler_buffer[y].end_byte) {
-            sprintf(buf, "%02x", global_cfg.file[i]);
-            append_to_buffer(ab, buf, 2);
-        } else {
-            append_to_buffer(ab, "  ", 2);
-        }
-        if (i == global_cfg.cur_byte) {
-            append_to_buffer(ab, "\x1b[m", 3);
-        }
-        padding -= 2;
+    if (!global_cfg.disassembler_buffer || y >= global_cfg.screenrows)
+        return;
+    const disassemblerRow *row = &global_cfg.disassembler_buffer[y];
+    if (row->start_byte >= row->end_byte || row->start_byte >= global_cfg.num_bytes) {
+        if (global_cfg.screencols)
+            append_to_buffer(ab, "~", 1);
+        return;
     }
-    append_to_buffer(ab, "| ", 2);
-    padding -= 2;
-    append_to_buffer(ab, global_cfg.disassembler_buffer[y].diss_str, diss_len);
-    padding -= diss_len;
-    while (padding--) {
-        append_to_buffer(ab, " ", 1);
+
+    size_t offset_width = editor_offset_width();
+    if (global_cfg.screencols <= offset_width + 2)
+        return;
+    int selected = row->start_byte <= global_cfg.cur_byte &&
+                   global_cfg.cur_byte < row->end_byte;
+    char offset[2 * sizeof(size_t) + 1];
+    snprintf(offset, sizeof(offset), "%0*zx", (int)offset_width, row->start_byte);
+    if (selected)
+        append_to_buffer(ab, "\x1b[7m", 4);
+    append_to_buffer(ab, offset, strlen(offset));
+    if (selected)
+        append_to_buffer(ab, "\x1b[m", 3);
+    append_to_buffer(ab, "  ", 2);
+    size_t available = global_cfg.screencols - offset_width - 2;
+
+    /* Keep at least 24 cells for the instruction before adding raw bytes. */
+    if (available >= 30 + 2 + 24) {
+        for (size_t j = 0; j < 15; ++j) {
+            if (global_cfg.file && j < row->end_byte - row->start_byte &&
+                j < global_cfg.num_bytes - row->start_byte) {
+                size_t pos = row->start_byte + j;
+                char hex[3];
+                snprintf(hex, sizeof(hex), "%02x", global_cfg.file[pos]);
+                if (pos == global_cfg.cur_byte)
+                    append_to_buffer(ab, "\x1b[7m", 4);
+                append_to_buffer(ab, hex, 2);
+                if (pos == global_cfg.cur_byte)
+                    append_to_buffer(ab, "\x1b[m", 3);
+            } else {
+                append_spaces(ab, 2);
+            }
+        }
+        append_to_buffer(ab, "  ", 2);
+        available -= 32;
     }
+    if (selected)
+        append_to_buffer(ab, "\x1b[7m", 4);
+    append_clipped(ab, row->diss_str, strnlen(row->diss_str, sizeof(row->diss_str)),
+                   available, 1);
+    if (selected)
+        append_to_buffer(ab, "\x1b[m", 3);
 }
 
 void editor_draw_rows(append_buffer *ab) {
-    size_t y;
-    switch (global_cfg.mode) {
-        case TEXT_MODE:
-            for (y = 0; y < global_cfg.screenrows; y++) {
-                size_t filerow = y + global_cfg.rowoff;
-                if (filerow >= global_cfg.numrows) {
-                    if (global_cfg.numrows == 0 && y == global_cfg.screenrows / 3) {
-                        char welcome[80];
-                        size_t welcomelen = snprintf(
-                            welcome, sizeof(welcome),
-                            "Linux HIEW editor -- version %s",
-                            EDITOR_VERSION);
-                        if (welcomelen > global_cfg.cur_screencols)
-                            welcomelen = global_cfg.cur_screencols;
-                        size_t padding = (global_cfg.cur_screencols - welcomelen) / 2;
-                        if (padding) {
-                            append_to_buffer(ab, "~", 1);
-                            padding--;
-                        }
-                        while (padding--)
-                            append_to_buffer(ab, " ", 1);
-                        append_to_buffer(ab, welcome, welcomelen);
-                    } else {
-                        append_to_buffer(ab, "~", 1);
-                    }
-                } else {
-                    draw_row_text(y, ab);
+    if (global_cfg.mode == DISASSEMBLER_MODE && global_cfg.disassembler_buffer)
+        disassemble_block(global_cfg.cur_byte);
+
+    for (size_t y = 0; y < global_cfg.screenrows; ++y) {
+        append_to_buffer(ab, "\x1b[K", 3);
+        if (global_cfg.mode == TEXT_MODE) {
+            if (y + global_cfg.rowoff >= global_cfg.numrows) {
+                if (!global_cfg.num_bytes && y == global_cfg.screenrows / 3) {
+                    const char welcome[] = "LHiew binary viewer " EDITOR_VERSION;
+                    size_t len = sizeof(welcome) - 1;
+                    if (len > global_cfg.screencols)
+                        len = global_cfg.screencols;
+                    append_spaces(ab, (global_cfg.screencols - len) / 2);
+                    append_clipped(ab, welcome, sizeof(welcome) - 1, len, 1);
+                } else if (global_cfg.screencols) {
+                    append_to_buffer(ab, "~", 1);
                 }
-                append_to_buffer(ab, "\x1b[K", 3);
-                append_to_buffer(ab, "\r\n", 2);
-            }
-            break;
-        case HEX_MODE:
-            for (y = 0; y < global_cfg.screenrows; y++) {
+            } else {
                 draw_row_text(y, ab);
-                draw_row_hex(y, ab);
-                append_to_buffer(ab, "\x1b[K", 3);
-                append_to_buffer(ab, "\r\n", 2);
             }
-            break;
-        case DISASSEMBLER_MODE:
-            if (global_cfg.filename != NULL) {
-                disassemble_block(global_cfg.cur_byte);
-            }
-            for (y = 0; y < global_cfg.screenrows; y++) {
-                draw_row_disassembler(y, ab);
-                append_to_buffer(ab, "\r\n", 2);
-            }
-            break;
+        } else if (global_cfg.mode == HEX_MODE) {
+            draw_row_hex(y, ab);
+        } else {
+            draw_row_disassembler(y, ab);
+        }
+        append_to_buffer(ab, "\r\n", 2);
     }
 }
 
 void editor_draw_status_bar(append_buffer *ab) {
-    append_to_buffer(ab, "\x1b[7m", 4);
-    char status[80], rstatus[80];
-    size_t len = snprintf(
-        status, sizeof(status), "%.20s",
-        global_cfg.filename ? global_cfg.filename : "[ No File is Open ]");
-    char *format_str = NULL;
-    char *dasm_mode_str = "";
-    switch (global_cfg.mode) {
-        case TEXT_MODE:         format_str = TEXT_MODE_STR; break;
-        case HEX_MODE:          format_str = HEX_MODE_STR; break;
-        case DISASSEMBLER_MODE: format_str = DISASSEMBLER_MODE_STR; break;
-    }
-    switch (global_cfg.disassembler_mode) {
-        case REAL:               dasm_mode_str = "Real opsize"; break;
-        case MODE_LONG_COMPAT_16: dasm_mode_str = "Long 16 opsize"; break;
-        case MODE_LONG_COMPAT_32: dasm_mode_str = "Long 32 opsize"; break;
-        case MODE_LONG_COMPAT_64: dasm_mode_str = "Long 64 opsize"; break;
-    }
-    size_t rlen;
+    size_t width = global_cfg.screencols;
+    char mode[48], status[160];
+    int compact = width < 64;
     if (global_cfg.mode == DISASSEMBLER_MODE) {
-        rlen = snprintf(rstatus, sizeof(rstatus), "%s (%s) %zu:%zu",
-                        format_str, dasm_mode_str,
-                        get_byte_position(), global_cfg.num_bytes);
+        const char *bits = "32";
+        if (global_cfg.disassembler_mode == REAL)
+            bits = "16R";
+        else if (global_cfg.disassembler_mode == MODE_LONG_COMPAT_16)
+            bits = "16";
+        else if (global_cfg.disassembler_mode == MODE_LONG_COMPAT_64)
+            bits = "64";
+        snprintf(mode, sizeof(mode), compact ? "ASM%s" : "Disassembler %s-bit", bits);
     } else {
-        rlen = snprintf(rstatus, sizeof(rstatus), "%s %zu:%zu - %lu/%zu",
-                        format_str,
-                        get_byte_position(), global_cfg.num_bytes,
-                        global_cfg.cy + 1, global_cfg.numrows);
+        snprintf(mode, sizeof(mode), "%s", global_cfg.mode == HEX_MODE
+                 ? (compact ? "HEX" : HEX_MODE_STR)
+                 : (compact ? "TEXT" : TEXT_MODE_STR));
     }
-    if (len > global_cfg.screencols)
-        len = global_cfg.screencols;
-    append_to_buffer(ab, status, len);
-    while (len < global_cfg.screencols) {
-        if (global_cfg.screencols - len == rlen) {
-            append_to_buffer(ab, rstatus, rlen);
-            break;
-        } else {
-            append_to_buffer(ab, " ", 1);
-            len++;
-        }
-    }
-    append_to_buffer(ab, "\x1b[m", 3);
-    append_to_buffer(ab, "\r\n", 2);
+    snprintf(status, sizeof(status), "%s %zu:%zu", mode,
+             global_cfg.cur_byte, global_cfg.num_bytes);
+    if (strlen(status) > width)
+        snprintf(status, sizeof(status), "%s @%zx", mode, global_cfg.cur_byte);
+    size_t status_len = strlen(status);
+    if (status_len > width)
+        status_len = width;
+
+    const char *filename = global_cfg.filename ? global_cfg.filename : "[No file]";
+    const char *basename = strrchr(filename, '/');
+    if (basename)
+        filename = basename + 1;
+    size_t filename_width = width > status_len ? width - status_len - 1 : 0;
+    size_t filename_len = strlen(filename);
+    if (filename_len > filename_width)
+        filename_len = filename_width;
+    append_to_buffer(ab, "\x1b[7m", 4);
+    append_clipped(ab, filename, strlen(filename), filename_len, 1);
+    append_spaces(ab, width - filename_len - status_len);
+    append_clipped(ab, status, strlen(status), status_len, 1);
+    append_to_buffer(ab, "\x1b[m\r\n", 5);
 }
 
 void editor_draw_message_bar(append_buffer *ab) {
     append_to_buffer(ab, "\x1b[K", 3);
-    size_t msg_len = strlen(global_cfg.statusmsg);
-    if (msg_len > global_cfg.screencols)
-        msg_len = global_cfg.screencols;
-    if (msg_len && time(NULL) - global_cfg.statusmsg_time < 5)
-        append_to_buffer(ab, global_cfg.statusmsg, msg_len);
+    const char *message = global_cfg.statusmsg;
+    if (!message[0] || time(NULL) - global_cfg.statusmsg_time >= 5 ||
+        strcmp(message, HELLO_MESSAGE) == 0) {
+        if (global_cfg.screencols < 40) {
+            message = global_cfg.mode == DISASSEMBLER_MODE
+                ? "^Q quit  m mode  o size" : "^Q quit  m mode";
+        } else if (global_cfg.screencols < 72) {
+            message = global_cfg.mode == DISASSEMBLER_MODE
+                ? "^Q quit | m mode | ^M back | o size"
+                : "Ctrl-Q quit | m mode | Ctrl-M back";
+        } else {
+            message = "Ctrl-Q quit | m next mode | Ctrl-M previous | o operand size";
+        }
+    }
+    append_clipped(ab, message, strlen(message), global_cfg.screencols, 1);
 }
 
 void editor_scroll(void) {
-    global_cfg.rx = 0;
-    if (global_cfg.cy < global_cfg.numrows) {
-        global_cfg.rx = global_cfg.cx;
-    }
-    if (global_cfg.cy < global_cfg.rowoff) {
+    if (!global_cfg.screenrows || !global_cfg.cur_screencols)
+        return;
+    global_cfg.rx = global_cfg.cx;
+    if (global_cfg.cy < global_cfg.rowoff)
         global_cfg.rowoff = global_cfg.cy;
-    }
-    if (global_cfg.cy >= global_cfg.rowoff + global_cfg.screenrows) {
+    if (global_cfg.cy - global_cfg.rowoff >= global_cfg.screenrows)
         global_cfg.rowoff = global_cfg.cy - global_cfg.screenrows + 1;
+    global_cfg.coloff = 0;
+}
+
+static void draw_resize_message(append_buffer *ab) {
+    append_to_buffer(ab, "\x1b[2J", 4);
+    size_t rows = global_cfg.terminal_rows;
+    size_t cols = global_cfg.screencols;
+    if (!rows || !cols)
+        return;
+    char minimum[64];
+    const char *lines[3];
+    size_t line_count;
+    if (rows == 1) {
+        snprintf(minimum, sizeof(minimum), "Resize %dx%d | ^Q quit", SCREENCOLS_MIN, SCREENROWS_MIN);
+        lines[0] = minimum;
+        line_count = 1;
+    } else if (rows == 2) {
+        snprintf(minimum, sizeof(minimum), "Resize to %dx%d", SCREENCOLS_MIN, SCREENROWS_MIN);
+        lines[0] = minimum;
+        lines[1] = "Ctrl-Q quit";
+        line_count = 2;
+    } else {
+        snprintf(minimum, sizeof(minimum), cols < SCREENCOLS_MIN
+                 ? "Need %dx%d" : "Resize to at least %dx%d", SCREENCOLS_MIN, SCREENROWS_MIN);
+        lines[0] = cols < SCREENCOLS_MIN ? "Too small" : "Window too small";
+        lines[1] = minimum;
+        lines[2] = cols < SCREENCOLS_MIN ? "Ctrl-Q quit" : "Ctrl-Q to quit";
+        line_count = 3;
     }
-    if (global_cfg.rx < global_cfg.coloff) {
-        global_cfg.coloff = global_cfg.rx;
+    size_t first_row = (rows - line_count) / 2 + 1;
+    for (size_t i = 0; i < line_count; ++i) {
+        size_t len = strlen(lines[i]);
+        if (len > cols)
+            len = cols;
+        append_position(ab, first_row + i, (cols - len) / 2 + 1);
+        append_clipped(ab, lines[i], strlen(lines[i]), len, 0);
     }
-    if (global_cfg.rx >= global_cfg.coloff + global_cfg.cur_screencols) {
-        global_cfg.coloff = global_cfg.rx - global_cfg.cur_screencols + 1;
+}
+
+void editor_draw_screen(append_buffer *ab) {
+    append_to_buffer(ab, "\x1b[?25l\x1b[H", 9);
+    if (global_cfg.window_too_small) {
+        draw_resize_message(ab);
+        append_position(ab, 1, 1);
+        return;
+    }
+    editor_scroll();
+    editor_draw_rows(ab);
+    editor_draw_status_bar(ab);
+    editor_draw_message_bar(ab);
+    if (global_cfg.mode == TEXT_MODE && global_cfg.screenrows && global_cfg.screencols) {
+        size_t cursor_row = global_cfg.cy - global_cfg.rowoff;
+        size_t cursor_col = global_cfg.rx;
+        if (cursor_row >= global_cfg.screenrows)
+            cursor_row = global_cfg.screenrows - 1;
+        if (cursor_col >= global_cfg.screencols)
+            cursor_col = global_cfg.screencols - 1;
+        append_position(ab, cursor_row + 1, cursor_col + 1);
+        append_to_buffer(ab, "\x1b[?25h", 6);
+    } else {
+        append_position(ab, 1, 1);
     }
 }
 
 void editor_refresh_screen(void) {
-    editor_scroll();
+    editor_update_window_size();
     append_buffer ab = ABUF_INIT;
-    append_to_buffer(&ab, "\x1b[?25l", 6);
-    append_to_buffer(&ab, "\x1b[H", 3);
-    editor_draw_rows(&ab);
-    editor_draw_status_bar(&ab);
-    editor_draw_message_bar(&ab);
-
-    char buf[32];
-    snprintf(buf, sizeof(buf), "\x1b[%lu;%luH",
-             (global_cfg.cy - global_cfg.rowoff) + 1,
-             (global_cfg.rx - global_cfg.coloff) + 1);
-    append_to_buffer(&ab, buf, strlen(buf));
-    if (global_cfg.mode != DISASSEMBLER_MODE) {
-        append_to_buffer(&ab, "\x1b[?25h", 6);
-    }
+    editor_draw_screen(&ab);
     write(STDOUT_FILENO, ab.buffer, ab.len);
     free_append_buffer(&ab);
 }

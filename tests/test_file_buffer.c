@@ -76,10 +76,27 @@ static void test_mmap_readonly(void) {
     cleanup_test_file();
 }
 
+static void test_open_empty_file(void) {
+    RESET_GLOBAL_CFG();
+    global_cfg.cur_screencols = 24;
+    create_test_file("", 0);
+    open_file_to_view((char *)TMP_FILE);
+    ASSERT_EQ(global_cfg.num_bytes, (size_t)0);
+    ASSERT_EQ(global_cfg.numrows, (size_t)0);
+    ASSERT_EQ(global_cfg.file, NULL);
+    ASSERT_NE(global_cfg.fp, NULL);
+    fclose(global_cfg.fp);
+    global_cfg.fp = NULL;
+    free(global_cfg.filename);
+    global_cfg.filename = NULL;
+    cleanup_test_file();
+}
+
 int main(void) {
     printf("test_file_buffer:\n");
     RUN_TEST(test_open_file);
     RUN_TEST(test_open_file_sets_numrows);
     RUN_TEST(test_mmap_readonly);
+    RUN_TEST(test_open_empty_file);
     TEST_REPORT();
 }

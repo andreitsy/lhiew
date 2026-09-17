@@ -1,6 +1,7 @@
 #include "lhiew/types.h"
 #include "test_harness.h"
 #include "lhiew/input.h"
+#include "lhiew/editor.h"
 #include "lhiew/terminal.h"
 
 #include <sys/mman.h>
@@ -131,6 +132,69 @@ static void test_ctrl_key_macro(void) {
     ASSERT_EQ(CTRL_KEY('a'), 1);
 }
 
+static void test_partial_row_navigation_after_resize(void) {
+    setup_text_mode(101, 80);
+    global_cfg.cur_byte = 99;
+    editor_resize(5, 24);
+    editor_move_cursor(ARROW_DOWN);
+    ASSERT_EQ(global_cfg.cur_byte, (size_t)101);
+    editor_move_cursor(ARROW_RIGHT);
+    ASSERT_EQ(global_cfg.cur_byte, (size_t)101);
+    editor_move_cursor(ARROW_LEFT);
+    ASSERT_EQ(global_cfg.cur_byte, (size_t)100);
+    global_cfg.cur_byte = 96;
+    switch_mode();
+    editor_move_cursor(ARROW_LEFT);
+    ASSERT_EQ(global_cfg.cur_byte, (size_t)95);
+    ASSERT_EQ(global_cfg.cx, (size_t)23);
+    ASSERT_EQ(global_cfg.cy, (size_t)3);
+    free(global_cfg.disassembler_buffer);
+    teardown();
+}
+
+static void test_navigation_pauses_while_too_small(void) {
+    setup_text_mode(256, 80);
+    global_cfg.cur_byte = 45;
+    editor_resize(2, 10);
+    editor_move_cursor(ARROW_DOWN);
+    ASSERT_EQ(global_cfg.cur_byte, (size_t)45);
+    editor_resize(8, 40);
+    editor_move_cursor(ARROW_RIGHT);
+    ASSERT_EQ(global_cfg.cur_byte, (size_t)46);
+    free(global_cfg.disassembler_buffer);
+    teardown();
+}
+
+static void test_disassembler_navigation_after_resize_and_eof(void) {
+    /* push %rbp; mov %rsp, %rbp; nop; ret */
+    uint8_t code[] = {0x55, 0x48, 0x89, 0xe5, 0x90, 0xc3};
+    RESET_GLOBAL_CFG();
+    global_cfg.file = code;
+    global_cfg.num_bytes = sizeof(code);
+    global_cfg.mode = DISASSEMBLER_MODE;
+    global_cfg.disassembler_mode = MODE_LONG_COMPAT_64;
+    editor_resize(24, 80);
+    editor_move_cursor(ARROW_DOWN);
+    ASSERT_EQ(global_cfg.cur_byte, (size_t)1);
+    editor_move_cursor(ARROW_RIGHT);
+    ASSERT_EQ(global_cfg.cur_byte, (size_t)2);
+    editor_resize(5, 24);
+    editor_move_cursor(ARROW_DOWN);
+    ASSERT_EQ(global_cfg.cur_byte, (size_t)4);
+    editor_move_cursor(ARROW_DOWN);
+    ASSERT_EQ(global_cfg.cur_byte, (size_t)5);
+    editor_move_cursor(ARROW_DOWN);
+    ASSERT_EQ(global_cfg.cur_byte, sizeof(code));
+    editor_move_cursor(ARROW_RIGHT);
+    editor_move_cursor(ARROW_DOWN);
+    ASSERT_EQ(global_cfg.cur_byte, sizeof(code));
+    editor_move_cursor(ARROW_LEFT);
+    ASSERT_EQ(global_cfg.cur_byte, (size_t)5);
+    editor_move_cursor(ARROW_UP);
+    ASSERT_EQ(global_cfg.cur_byte, (size_t)4);
+    free(global_cfg.disassembler_buffer);
+}
+
 int main(void) {
     printf("test_input:\n");
     RUN_TEST(test_move_right);
@@ -141,5 +205,8 @@ int main(void) {
     RUN_TEST(test_move_right_wraps_row);
     RUN_TEST(test_hex_mode_cursor);
     RUN_TEST(test_ctrl_key_macro);
+    RUN_TEST(test_partial_row_navigation_after_resize);
+    RUN_TEST(test_navigation_pauses_while_too_small);
+    RUN_TEST(test_disassembler_navigation_after_resize_and_eof);
     TEST_REPORT();
 }
