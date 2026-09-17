@@ -3,6 +3,7 @@
 #include "lhiew/architecture.h"
 #include "lhiew/editor.h"
 #include "lhiew/file_buffer.h"
+#include "lhiew/file_backup.h"
 #include "lhiew/render.h"
 
 #include <errno.h>
@@ -134,6 +135,19 @@ int hex_edit_begin(void) {
         editor_set_status_message("File changed; reopen before editing");
         return 0;
     }
+    if (!file_backup_ensure(global_cfg.filename, fd)) {
+        int saved_errno = errno;
+        close(fd);
+        editor_set_status_message("Cannot create safe .backup: %s; editing refused", strerror(saved_errno));
+        return 0;
+    }
+    struct stat after_backup, named;
+    if (fstat(fd, &after_backup) != 0 || stat(global_cfg.filename, &named) != 0 ||
+        !same_version(&opened, &after_backup) || !same_identity(&after_backup, &named)) {
+        close(fd);
+        editor_set_status_message("File changed during backup; reopen before editing");
+        return 0;
+    }
     if (mprotect(global_cfg.file, global_cfg.num_bytes, PROT_READ | PROT_WRITE) != 0) {
         int saved_errno = errno;
         close(fd);
@@ -161,19 +175,7 @@ static size_t find_change(size_t offset) {
     return first;
 }
 
-int hex_edit_set_byte(size_t offset, uint8_t value) {
-    if (!global_cfg.editing || edit_fd < 0) {
-        editor_set_status_message("Enter hex editing first");
-        return 0;
-    }
-    if (offset >= global_cfg.num_bytes) {
-        editor_set_status_message("End of file: overwrite existing bytes only");
-        return 0;
-    }
-    /* Validate before touching the mapping: an external truncate can invalidate
-       mapped pages. Uncooperative concurrent writers still require reopening. */
-    if (!validate_file())
-        return 0;
+static int stage_byte(size_t offset, uint8_t value) {
     size_t index = find_change(offset);
     if (index < change_count && changes[index].offset == offset) {
         changes[index].after = value;
@@ -207,6 +209,54 @@ int hex_edit_set_byte(size_t offset, uint8_t value) {
     changes[index] = (byteChange){offset, before, value, 0};
     change_count++;
     global_cfg.file[offset] = value;
+    return 1;
+}
+
+int hex_edit_set_byte(size_t offset, uint8_t value) {
+    if (!global_cfg.editing || edit_fd < 0) {
+        editor_set_status_message("Enter hex editing first");
+        return 0;
+    }
+    if (offset >= global_cfg.num_bytes) {
+        editor_set_status_message("End of file: overwrite existing bytes only");
+        return 0;
+    }
+    if (!validate_file()) return 0;
+    return stage_byte(offset, value);
+}
+
+int hex_edit_patch(const hexPatch *patches, size_t count) {
+    if (!global_cfg.editing || edit_fd < 0 || !validate_file()) return 0;
+    size_t reserve = change_count;
+    for (size_t i = 0; i < count; ++i) {
+        const hexPatch *patch = &patches[i];
+        if (!patch->bytes || patch->offset > global_cfg.num_bytes ||
+            patch->length > global_cfg.num_bytes - patch->offset ||
+            patch->length > SIZE_MAX - reserve) {
+            editor_set_status_message("Invalid import edit span");
+            return 0;
+        }
+        reserve += patch->length;
+    }
+    if (reserve > change_capacity) {
+        if (reserve > SIZE_MAX / sizeof(*changes)) {
+            editor_set_status_message("Too many pending edits");
+            return 0;
+        }
+        byteChange *replacement = HEX_REALLOC(changes, reserve * sizeof(*changes));
+        if (!replacement) {
+            editor_set_status_message("Not enough memory for the complete edit");
+            return 0;
+        }
+        changes = replacement;
+        change_capacity = reserve;
+    }
+    /* All bounds and allocations precede mutation. stage_byte cannot allocate
+       or fail once the worst-case number of records has been reserved. */
+    for (size_t i = 0; i < count; ++i) {
+        for (size_t j = 0; j < patches[i].length; ++j)
+            stage_byte(patches[i].offset + j, patches[i].bytes[j]);
+    }
     return 1;
 }
 

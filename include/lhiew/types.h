@@ -106,6 +106,12 @@ typedef struct editorConfig {
     int               goto_prompt;
     size_t            goto_length;
     char              goto_input[2 * sizeof(size_t) + 3];
+    int               executable_browser;
+    int               executable_prompt;
+    int               executable_imports;
+    size_t            executable_choice;
+    size_t            executable_input_length;
+    char              executable_input[256];
     uint8_t          *file;
     time_t            statusmsg_time;
     FILE             *fp;

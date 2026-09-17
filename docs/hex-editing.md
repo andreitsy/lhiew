@@ -13,7 +13,8 @@ implemented. The [feature comparison](../FEATURES.md) records these limits.
 
 1. Open an existing file: `./build/lhiew /path/to/file`.
 2. Press **F3** from any view. LHiew enters the hex editor after checking that
-   the same nonempty file can be opened for writing. Read-only or empty files
+   the same nonempty file can be opened for writing and securing its `.backup`.
+   Read-only or empty files
    remain viewable, but cannot enter this overwrite editor.
 3. Press **F5**, enter an **absolute hexadecimal file offset**, and press
    **Enter**. `g` also opens goto while viewing, but is ordinary text in the
@@ -68,6 +69,11 @@ The result should be:
 00 01 02 03 04 05 06 07 41 42 43 44 0c 0d 0e 0f
 ```
 
+On its first run, this example also creates `/tmp/lhiew-edit-demo.bin.backup`
+containing the original `00` through `0f` bytes. Repeating the walkthrough keeps
+that first backup; delete or archive it yourself only when you intentionally want
+to establish a different baseline.
+
 To exercise discard, reopen the file, press F3, change a byte, press Escape,
 then `d`. The pending edit is discarded and hex viewing resumes. To cancel
 leaving instead, press Escape again at the unsaved-edits prompt.
@@ -77,6 +83,25 @@ The same navigation is available at large offsets. For example, F5 followed by
 Creating a large sparse file is an external setup operation, not an LHiew command.
 
 ## Storage, conflicts, and limits
+
+Before entering editing, LHiew creates **`<filename>.backup`** beside the file.
+This applies to hex edits and [structured import edits](executable-imports.md).
+An existing independent regular backup is preserved, including across application
+restarts: it contains the first saved backup version, not necessarily the file
+as it looked at the start of the latest editing session. Merely viewing a file
+does not create a backup.
+
+New backups use bounded buffers and copy sparse extents where supported, with a
+zero-skipping fallback. A temporary copy is flushed and published exclusively;
+its directory is flushed before editing begins. The source is checked for changes
+during copying. A symlink, nonregular destination, or backup referring to the
+source inode is rejected. Failure to copy, publish or flush the backup prevents
+editing. Creating a backup needs directory access and space for the stored data;
+copying a large nonsparse file can take time.
+
+The backup stores file contents with private permissions; it does not preserve
+all source metadata, and there is no built-in restore command. It does not make
+later saves atomic or provide per-edit undo.
 
 File data is demand-paged through a private mapping. Pending change records are
 stored for modified bytes; memory use does not require a second complete file
@@ -94,8 +119,9 @@ Save is **not atomic**. An I/O or flush failure may leave some or all intended
 bytes on disk while pending edits remain. Discard reloads the opened file's disk
 contents; it does not undo bytes already written by an unsuccessful save. If
 another process replaced the pathname, reopen the path to view that replacement.
-There is no transaction log, automatic backup, or general undo history. These
-checks also do not provide exclusive access against concurrent writers.
+The original `.backup` remains available, but there is no transaction log or
+general undo history. These checks do not provide exclusive access against
+concurrent writers.
 
 ## Relationship to the Hiew 6.03 article
 
@@ -113,6 +139,7 @@ article is now available.
 | Reach a file location | F5 absolute hex file offset; arrows, pages, row/file boundaries |
 | Overwrite bytes or printable text | Hex nibbles or Tab-selected ASCII input; file length unchanged |
 | Save pending changes | F9 saves and continues editing |
+| Browse executable imports and edit existing names/ordinals | F8 browser, F3 field editing, F9 save; [format limits apply](executable-imports.md) |
 | Leave or quit with pending edits | Explicit save/discard/continue prompt; this is LHiew behavior, not a copied historical shortcut contract |
 | Edit beyond one visible screen | Supported; navigation is not limited to a screen-sized edit buffer |
 | Create a file using the navigator | Not implemented; the walkthrough creates its file externally |
@@ -121,20 +148,23 @@ article is now available.
 | Assemble instructions, search instruction patterns, or apply Crypt/XOR transforms | Not implemented |
 | Undo arbitrary edits or repair structured headers | Not implemented; whole pending-change discard is not general undo |
 
-The article also discusses import names, executable browsers, file history,
-configuration, and calculator functions. They are separate features, not
-prerequisites for this byte-overwrite workflow. Its context-dependent and
+The executable browser supplies a separate import-table workflow. File history,
+configuration, and calculator functions remain separate missing features. The
+article's context-dependent and
 occasionally conflicting historical bindings are documented separately in
 [FEATURES.md](../FEATURES.md#historical-additions-hiew-603).
 
 ## Verification
 
 [`tests/test_hex_edit.c`](../tests/test_hex_edit.c) checks storage persistence,
-discard, failures/conflicts,
+discard, backup protection, failures/conflicts,
 boundary handling, and overwrites in a sparse file beyond 4 GiB. Terminal tests
 in [`tests/test_hex_editor.py`](../tests/test_hex_editor.py) exercise the visible
 open → goto → edit → save → leave/reopen workflow, both
 input panes, unsaved-change prompts, navigation, read-only failures, and resize.
+[`tests/test_file_backup.c`](../tests/test_file_backup.c) checks original-byte
+preservation, retained existing backups, rejected aliases, failed-copy cleanup,
+and sparse backups beyond 4 GiB.
 Run the repository's full suite with:
 
 ```sh

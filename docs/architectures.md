@@ -41,7 +41,7 @@ instruction bytes, which can differ from the container's byte order.
 
 | CPU family | Manual profiles | Automatic header recognition |
 |---|---|---|
-| x86 | real16, protected16, 32, 64 | MZ real16; ELF, PE/TE, Mach-O 32/64 |
+| x86 | real16, protected16, 32, 64 | MZ real16; ELF, PE/TE, Mach-O 32/64; i386 NLM v4 32-bit |
 | ARM | ARM and Thumb/Thumb2, each LE/BE | ELF, PE/TE; ARM Mach-O |
 | AArch64 | A64, LE instructions | ELF, PE/TE, Mach-O |
 | MIPS | 32/64, each LE/BE | ELF; selected legacy PE machine IDs |
@@ -108,6 +108,14 @@ not fully describe CPU variants; the displayed profile makes that choice visible
   LC_UNIXTHREAD entry decoder. See [Apple loader definitions](https://github.com/apple-oss-distributions/xnu/blob/main/EXTERNAL_HEADERS/mach-o/loader.h).
 - **DOS MZ:** use real16, header paragraphs and CS:IP. First check for PE, NE,
   LE or LX signatures so a newer executable is not mistaken for DOS code.
+- **i386 NLM v4:** validate the header and code/data spans, select x86-32, and
+  resolve the code-relative entry to a file offset. Runtime load bases are not
+  stored here; decoding uses file offsets within separate code/data boundaries.
+  Other NLM CPUs and versions are explicitly unsupported.
+
+The separate [executable browser](executable-imports.md) handles PE, NE, LE, LX
+and i386 NLM imports and header/region rows. Its format coverage does not imply
+automatic architecture detection or runtime address mapping for every format.
 
 When an entry is absent or cannot be mapped, the first file-backed executable
 region is used where available. This is a viewing starting point, not execution
@@ -115,7 +123,8 @@ or relocation. Relocatable objects have unresolved relocations; branch text
 uses their stored section addresses. Data can still be viewed as instructions
 by moving into it; this is not a code/data analysis engine.
 
-All decoders receive the mapped runtime PC. Their native assembly conventions
+Decoders receive the mapped runtime PC where known, otherwise the file offset.
+Their native assembly conventions
 are retained: x86/ARM/AArch64 show absolute branch destinations, while Capstone's
 RISC-V JAL text uses the relative displacement (for example, `jal 8`). That
 displacement is not a file offset. Runtime addresses are not a separate gutter
@@ -135,11 +144,14 @@ column or a virtual-address navigation feature.
 - **Virtual machines:** JVM bytecode, .NET IL, WebAssembly and EVM need their own
   container/method handling; their presence cannot be inferred from native
   machine type alone. Classic BPF is not the eBPF profile.
-- **Legacy containers:** NE/LE/LX are recognized as unsupported; COFF objects,
+- **Legacy containers:** NE/LE/LX imports and headers can be browsed, but their
+  architecture detection and decoder address mapping still require more work.
+  NLM browsing/detection is limited to the primary i386 v4 image. COFF objects,
   archives, firmware containers, compressed/packed code and encrypted images
   need separate parsing or extraction.
-- **Navigation and analysis:** no header browser, symbols/import/export browser,
-  VA goto, relocation application, branch following or user-forced re-sync yet.
+- **Navigation and analysis:** the header/import browser covers PE/NE/LE/LX/NLM;
+  symbols/exports, ELF/Mach-O/TE browser panels, VA goto, relocation application,
+  branch following and user-forced re-sync remain absent.
   Backward decoding of variable-length instructions remains heuristic when a
   known boundary lies outside the bounded lookback.
 

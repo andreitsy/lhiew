@@ -37,6 +37,7 @@ add_library(lhiew_core STATIC
     src/append_buffer.c
     src/terminal.c
     src/file_buffer.c
+    src/file_backup.c
     src/hex_edit.c
     src/editor.c
     src/input.c
@@ -44,6 +45,12 @@ add_library(lhiew_core STATIC
     src/disassembler.c
     src/architecture.c
     src/binary.c
+    src/executable.c
+    src/executable_pe.c
+    src/executable_ne.c
+    src/executable_linear.c
+    src/executable_nlm.c
+    src/executable_browser.c
 )
 
 target_include_directories(lhiew_core PUBLIC include)
@@ -70,6 +77,7 @@ lhiew_add_test(append_buffer)
 lhiew_add_test(types)
 lhiew_add_test(editor)
 lhiew_add_test(file_buffer)
+lhiew_add_test(file_backup)
 lhiew_add_test(hex_edit)
 # Compile the same backend with deterministic I/O/allocation fault injection.
 # The test object satisfies its symbols before the static core is searched.
@@ -86,6 +94,10 @@ lhiew_add_test(disassembler)
 lhiew_add_test(binary_fixtures)
 lhiew_add_test(architectures)
 lhiew_add_test(binary)
+lhiew_add_test(executable_pe)
+lhiew_add_test(executable_ne)
+lhiew_add_test(executable_linear)
+lhiew_add_test(executable_nlm)
 target_compile_definitions(test_architectures PRIVATE
     LHIEW_ARCHITECTURE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/architecture_fixtures")
 target_compile_definitions(test_binary_fixtures PRIVATE
@@ -110,5 +122,10 @@ if(UNIX)
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_hex_editor.py
                 $<TARGET_FILE:lhiew>)
         set_tests_properties(hex_editor PROPERTIES TIMEOUT 90)
+        add_test(NAME executable_browser
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_executable_browser.py
+                $<TARGET_FILE:lhiew>)
+        set_tests_properties(executable_browser PROPERTIES TIMEOUT 90)
     endif()
 endif()

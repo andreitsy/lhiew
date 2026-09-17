@@ -64,11 +64,14 @@ The editor is built around a single global `editorConfig global_cfg` (declared i
 - **append_buffer** (`append_buffer.h`, `append_buffer.c`) — growable byte buffer used to assemble a full screen frame before a single `write()`.
 - **terminal** (`terminal.h`, `terminal.c`) — termios raw-mode setup/teardown, escape-sequence key decoder (arrows, PgUp/PgDn, Del), window-size detection, `die_safely`.
 - **file_buffer** (`file_buffer.h`, `file_buffer.c`) — regular-file open, checked file-size conversion and read-only private `mmap` into `global_cfg.file`. Reload replaces the mapping without copying the whole file.
-- **hex_edit** (`hex_edit.h`, `hex_edit.c`) — writable reopen with file identity checks, private copy-on-write editing and a sparse sorted list of changed bytes. Saves verify file identity/version and expected original bytes, then use `pwrite` and `fsync`; failed saves retain pending records. Discard remaps the originally opened file. See `docs/hex-editing.md` for limits and failure semantics.
+- **hex_edit** (`hex_edit.h`, `hex_edit.c`) — writable reopen with file identity checks, mandatory backup before edit enable, private copy-on-write editing and a sparse sorted list of changed bytes. `hex_edit_patch` validates and reserves an entire group of field changes before staging any bytes. Saves verify file identity/version and expected original bytes, then use `pwrite` and `fsync`; failed saves retain pending records. Discard remaps the originally opened file. See `docs/hex-editing.md` for limits and failure semantics.
+- **file_backup** (`file_backup.h`, `file_backup.c`) — creates `<filename>.backup` with bounded-memory, sparse-aware copying and exclusive publication. Preserves an existing independent regular backup; source changes or backup failures prevent editing. Flushes the copy and parent directory before editing begins.
+- **executable** (`executable.h`, `executable.c`, `executable_{pe,ne,linear,nlm}.c`) — bounded PE32/PE32+, NE, LE/LX and i386 NLM v4 metadata parsers, independent of editor state. Rows expose raw file spans and validated editable name/ordinal fields; errors disable all structured edits. Initialize `executableInfo` to zero and release its rows with `executable_free`.
+- **executable_browser** (`executable_browser.h`, `executable_browser.c`) — F8/`b` header/import browser, raw-byte navigation and exact-length name/width-preserving ordinal prompts. Uses the existing hex edit transaction/save/discard path; paired PE lookup/IAT changes stage together. See `docs/executable-imports.md` for format limits.
 - **editor** (`editor.h`, `editor.c`) — `init_editor` lifecycle, `switch_mode` (recomputes `cx`/`cy`/`numrows` from `cur_byte`), `get_row_len`.
 - **input** (`input.h`, `input.c`) — `editor_process_keypress` dispatches keys: mode switching (`m` / `Ctrl-M`), disassembler operand-size cycling (`o`), cursor movement via `editor_move_cursor`, quit (`Ctrl-Q`).
 - **render** (`render.h`, `render.c`) — per-mode row drawing (`draw_row_text`, `draw_row_hex`, `draw_row_disassembler`), status/message bars, scrolling, `editor_refresh_screen`.
-- **binary** (`binary.h`, `binary.c`) — bounded ELF, PE/TE, DOS MZ and thin Mach-O parsing. Distinguishes raw, detected, unsupported and malformed files; supplies entry/first-code offsets and file-region-to-runtime-address mappings without heap allocation.
+- **binary** (`binary.h`, `binary.c`) — bounded ELF, PE/TE, DOS MZ, thin Mach-O and i386 NLM v4 parsing. Distinguishes raw, detected, unsupported and malformed files; supplies entry/first-code offsets and file-region-to-runtime-address mappings without heap allocation. NLM uses file offsets because its load base is not encoded.
 - **architecture** (`architecture.h`, `architecture.c`) — named decoder profiles, automatic detection on file read, manual overrides, profile labels, instruction alignment and entry navigation. Static detection metadata is valid only for the currently detected file; `binary_detected` and file identity gate access.
 - **disassembler** (`disassembler.h`, `disassembler.c`) — wraps Zydis/Capstone. `disassemble_block(cur_byte)` fills `global_cfg.disassembler_buffer` with up to `screenrows` rows, centering the instruction containing `cur_byte`. A single forward decoding pass retains preceding rows in a ring, preserving Thumb IT state. Bounded lookback respects cached boundaries, known entry points, instruction alignment and mapped region ends.
 
@@ -115,6 +118,23 @@ switches to printable ASCII. F9 saves; Escape/F10 leaves edit mode. Leaving or
 quitting with pending changes opens `edit_exit_prompt` (1 = leave, 2 = quit):
 `s` saves, `d` discards, Escape continues. Mode/architecture shortcuts are
 inactive while editing so letters remain data. Editing never resizes the file.
+
+Before editing begins, `<filename>.backup` must exist as an independent regular
+file. A new backup captures the original bytes; existing backups are preserved
+across saves and sessions. Failure to copy, validate or flush the backup prevents
+editing. Backups preserve file bytes, not all metadata, and are not automatically
+restored after a failed save.
+
+F8 or `b` while viewing opens the executable browser. `executable_browser`,
+`executable_imports` and `executable_choice` track its state; Tab switches the
+import and header/region lists, Enter jumps to a raw file span, and F3 opens a
+field prompt. `executable_prompt` (1 = name, 2 = ordinal), `executable_input` and
+`executable_input_length` hold prompt state. Names keep their exact byte length;
+ordinal edits preserve field width and encoding flags. F9 saves; Escape cancels
+a prompt or closes the browser, retaining staged edits for the ordinary hex
+save/discard flow. F8 remains available while editing; `b` remains byte input.
+Browser text is copied from bounded metadata, sanitized and drawn through the
+append buffer. No table resizing, import insertion/removal or relocation occurs.
 
 F5 (or `g` while viewing) opens `goto_prompt`; `goto_input`/`goto_length` hold an
 absolute hexadecimal file offset, with optional `0x`. Parsing checks overflow

@@ -542,6 +542,95 @@ static void test_truncated_headers_and_raw_bytes(void) {
     ASSERT_STR_EQ(binary_format_name(BINARY_FORMAT_MACHO_FAT), "Mach-O universal");
 }
 
+static void make_nlm_image(uint8_t data[512]) {
+    memset(data, 0, 512);
+    memcpy(data, "NetWare Loadable Module\x1a", 24);
+    put32(data + 24, 4, 0);
+    data[28] = 8;
+    memcpy(data + 29, "TEST.NLM", 8);
+    put32(data + 42, 256, 0);
+    put32(data + 46, 32, 0);
+    put32(data + 50, 320, 0);
+    put32(data + 54, 64, 0);
+    put32(data + 110, 4, 0);
+    memset(data + 256, 0x90, 32);
+}
+
+static void test_nlm_i386_images_and_entry(void) {
+    uint8_t data[512];
+    make_nlm_image(data);
+    binaryInfo info;
+    binaryRegion region;
+    binary_detect(data, sizeof(data), &info);
+    ASSERT_EQ(info.status, BINARY_DETECTED);
+    ASSERT_EQ(info.format, BINARY_FORMAT_NLM);
+    ASSERT_STR_EQ(binary_format_name(info.format), "NLM");
+    ASSERT_EQ(info.architecture.id, ARCH_X86);
+    ASSERT_EQ(info.architecture.x86_mode, MODE_LONG_COMPAT_32);
+    ASSERT(!info.architecture.big_endian);
+    ASSERT(info.has_entry);
+    ASSERT_EQ(info.entry_offset, (size_t)260);
+    ASSERT(binary_region_at(data, sizeof(data), &info, 260, &region));
+    ASSERT_EQ(region.offset, (size_t)256);
+    ASSERT_EQ(region.size, (size_t)32);
+    ASSERT_EQ(region.address, UINT64_C(256));
+    ASSERT(region.executable);
+    ASSERT(binary_region_at(data, sizeof(data), &info, 383, &region));
+    ASSERT_EQ(region.offset, (size_t)320);
+    ASSERT_EQ(region.size, (size_t)64);
+    ASSERT_EQ(region.address, UINT64_C(320));
+    ASSERT(!region.executable);
+    ASSERT(!binary_region_at(data, sizeof(data), &info, 255, &region));
+    ASSERT(!binary_region_at(data, sizeof(data), &info, 288, &region));
+    ASSERT(!binary_region_at(data, sizeof(data), &info, 384, &region));
+    put32(data + 46, 0, 0);
+    put32(data + 110, 0, 0);
+    binary_detect(data, sizeof(data), &info);
+    ASSERT_EQ(info.status, BINARY_DETECTED);
+    ASSERT(!info.has_entry);
+}
+
+static void test_nlm_malformed_and_unsupported_headers(void) {
+    uint8_t data[512];
+    binaryInfo info;
+    binaryRegion region;
+    const struct { size_t field; uint32_t value; } cases[] = {
+        {42, 128}, {42, 500}, {46, UINT32_MAX}, {50, 280},
+        {50, 500}, {54, UINT32_MAX}, {110, 32}
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        make_nlm_image(data);
+        put32(data + cases[i].field, cases[i].value, 0);
+        binary_detect(data, sizeof(data), &info);
+        ASSERT_EQ(info.status, BINARY_MALFORMED);
+        ASSERT_EQ(info.architecture.id, ARCH_UNKNOWN);
+        ASSERT(!info.has_entry);
+        ASSERT(!binary_region_at(data, sizeof(data), &info, 260, &region));
+    }
+    make_nlm_image(data);
+    for (size_t length = 8; length < 150; ++length) {
+        binary_detect(data, length, &info);
+        ASSERT_EQ(info.status, BINARY_MALFORMED);
+    }
+    data[130] = 128;
+    binary_detect(data, sizeof(data), &info);
+    ASSERT_EQ(info.status, BINARY_MALFORMED);
+    make_nlm_image(data);
+    data[37] = 'X';
+    binary_detect(data, sizeof(data), &info);
+    ASSERT_EQ(info.status, BINARY_MALFORMED);
+    make_nlm_image(data);
+    put32(data + 24, 5, 0);
+    binary_detect(data, sizeof(data), &info);
+    ASSERT_EQ(info.status, BINARY_UNSUPPORTED);
+    ASSERT_EQ(info.architecture.id, ARCH_UNKNOWN);
+    ASSERT(!info.has_entry);
+    ASSERT(!binary_region_at(data, sizeof(data), &info, 260, &region));
+    memcpy(data, "NetWare PowerPC Module \x1a", 24);
+    binary_detect(data, sizeof(data), &info);
+    ASSERT_EQ(info.status, BINARY_UNSUPPORTED);
+}
+
 int main(void) {
     RUN_TEST(test_elf_architectures_and_addresses);
     RUN_TEST(test_elf_machine_modes);
@@ -555,5 +644,7 @@ int main(void) {
     RUN_TEST(test_nested_sections_limit_segment_mappings);
     RUN_TEST(test_macho_fat_is_explicitly_unsupported);
     RUN_TEST(test_truncated_headers_and_raw_bytes);
+    RUN_TEST(test_nlm_i386_images_and_entry);
+    RUN_TEST(test_nlm_malformed_and_unsupported_headers);
     TEST_REPORT();
 }
