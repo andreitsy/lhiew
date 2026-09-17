@@ -10,6 +10,7 @@ enum editorKey {
     PAGE_UP,
     PAGE_DOWN,
     DEL_KEY,
+    SHIFT_F1,
 };
 
 void die_safely(const char *s);

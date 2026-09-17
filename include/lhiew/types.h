@@ -35,6 +35,37 @@ typedef enum disassemblerMode {
     MODE_LONG_COMPAT_64,
 } disassemblerMode;
 
+typedef enum architectureId {
+    ARCH_X86 = 0,
+    ARCH_ARM,
+    ARCH_THUMB,
+    ARCH_AARCH64,
+    ARCH_MIPS32,
+    ARCH_MIPS64,
+    ARCH_PPC32,
+    ARCH_PPC64,
+    ARCH_SPARC32,
+    ARCH_SPARC64,
+    ARCH_SYSTEMZ,
+    ARCH_M68K,
+    ARCH_RISCV32,
+    ARCH_RISCV64,
+    ARCH_EBPF,
+    ARCH_SH,
+    ARCH_TRICORE,
+    ARCH_XCORE,
+    ARCH_TMS320C64X,
+    ARCH_M680X,
+    ARCH_MOS65XX,
+    ARCH_UNKNOWN,
+} architectureId;
+
+typedef struct architectureSpec {
+    architectureId id;
+    disassemblerMode x86_mode;
+    int big_endian;
+} architectureSpec;
+
 typedef struct editorRow {
     size_t size;
     char  *chars;
@@ -62,6 +93,12 @@ typedef struct editorConfig {
     size_t            cur_byte;
     editorMode        mode;
     disassemblerMode  disassembler_mode;
+    architectureId    architecture;
+    int               big_endian;
+    int               architecture_manual;
+    int               architecture_menu;
+    size_t            architecture_choice;
+    int               binary_detected;
     uint8_t          *file;
     time_t            statusmsg_time;
     FILE             *fp;

@@ -1,5 +1,6 @@
 #include "lhiew/types.h"
 #include "lhiew/render.h"
+#include "lhiew/architecture.h"
 #include "lhiew/disassembler.h"
 #include "lhiew/editor.h"
 
@@ -205,11 +206,48 @@ void editor_draw_rows(append_buffer *ab) {
     }
 }
 
+static void draw_architecture_menu(append_buffer *ab) {
+    size_t count = architecture_profile_count();
+    size_t visible = global_cfg.screenrows > 1 ? global_cfg.screenrows - 1 : 1;
+    size_t choice = global_cfg.architecture_choice;
+    if (count && choice >= count)
+        choice = count - 1;
+    size_t first = choice / visible * visible;
+    size_t current = architecture_current_profile();
+    for (size_t y = 0; y < global_cfg.screenrows; ++y) {
+        append_to_buffer(ab, "\x1b[K", 3);
+        if (!y) {
+            char title[160];
+            snprintf(title, sizeof(title), "Architecture %zu/%zu%s%s", choice + 1, count,
+                     global_cfg.screencols >= 64 ? " | " : "",
+                     global_cfg.screencols >= 64 ? architecture_detection_label() : "");
+            append_clipped(ab, title, strlen(title), global_cfg.screencols, 1);
+        } else if (first + y - 1 < count) {
+            size_t index = first + y - 1;
+            const architectureProfile *profile = architecture_profile(index);
+            char prefix[] = "   ";
+            prefix[0] = index == choice ? '>' : ' ';
+            prefix[1] = index == current ? '*' : ' ';
+            if (index == choice)
+                append_to_buffer(ab, "\x1b[7m", 4);
+            size_t prefix_width = global_cfg.screencols < 3 ? global_cfg.screencols : 3;
+            append_clipped(ab, prefix, 3, prefix_width, 0);
+            append_clipped(ab, profile->name, strlen(profile->name),
+                           global_cfg.screencols - prefix_width, 1);
+            if (index == choice)
+                append_to_buffer(ab, "\x1b[m", 3);
+        }
+        append_to_buffer(ab, "\r\n", 2);
+    }
+}
+
 void editor_draw_status_bar(append_buffer *ab) {
     size_t width = global_cfg.screencols;
     char mode[48], status[160];
     int compact = width < 64;
-    if (global_cfg.mode == DISASSEMBLER_MODE) {
+    if (global_cfg.mode == DISASSEMBLER_MODE && global_cfg.architecture != ARCH_X86) {
+        snprintf(mode, sizeof(mode), "ASM %s", architecture_current_name());
+    } else if (global_cfg.mode == DISASSEMBLER_MODE) {
         const char *bits = "32";
         if (global_cfg.disassembler_mode == REAL)
             bits = "16R";
@@ -225,6 +263,12 @@ void editor_draw_status_bar(append_buffer *ab) {
     }
     snprintf(status, sizeof(status), "%s %zu:%zu", mode,
              global_cfg.cur_byte, global_cfg.num_bytes);
+    const binaryInfo *info = architecture_binary_info();
+    const char *selection = global_cfg.architecture_manual ? "manual"
+        : !info || info->status == BINARY_RAW ? "auto/raw" : "auto";
+    if (global_cfg.mode == DISASSEMBLER_MODE && strlen(status) + strlen(selection) + 3 <= width)
+        snprintf(status, sizeof(status), "%s [%s] %zu:%zu", mode, selection,
+                 global_cfg.cur_byte, global_cfg.num_bytes);
     if (strlen(status) > width)
         snprintf(status, sizeof(status), "%s @%zx", mode, global_cfg.cur_byte);
     size_t status_len = strlen(status);
@@ -249,17 +293,17 @@ void editor_draw_status_bar(append_buffer *ab) {
 void editor_draw_message_bar(append_buffer *ab) {
     append_to_buffer(ab, "\x1b[K", 3);
     const char *message = global_cfg.statusmsg;
-    if (!message[0] || time(NULL) - global_cfg.statusmsg_time >= 5 ||
+    if (global_cfg.architecture_menu) {
+        message = global_cfg.screencols < 64 ? "Enter apply | Esc cancel"
+            : "Up/Down j/k | PgUp/PgDn | Enter apply | Esc cancel | Ctrl-Q quit";
+    } else if (!message[0] || time(NULL) - global_cfg.statusmsg_time >= 5 ||
         strcmp(message, HELLO_MESSAGE) == 0) {
         if (global_cfg.screencols < 40) {
-            message = global_cfg.mode == DISASSEMBLER_MODE
-                ? "^Q quit  m mode  o size" : "^Q quit  m mode";
+            message = "^Q quit m a:arch e:entry";
         } else if (global_cfg.screencols < 72) {
-            message = global_cfg.mode == DISASSEMBLER_MODE
-                ? "^Q quit | m mode | ^M back | o size"
-                : "Ctrl-Q quit | m mode | Ctrl-M back";
+            message = "^Q quit | m mode | a arch | e entry";
         } else {
-            message = "Ctrl-Q quit | m next mode | Ctrl-M previous | o operand size";
+            message = "^Q quit | m/^M mode | a/Shift-F1 arch | e entry | o x86 size";
         }
     }
     append_clipped(ab, message, strlen(message), global_cfg.screencols, 1);
@@ -319,11 +363,16 @@ void editor_draw_screen(append_buffer *ab) {
         append_position(ab, 1, 1);
         return;
     }
-    editor_scroll();
-    editor_draw_rows(ab);
+    if (global_cfg.architecture_menu) {
+        draw_architecture_menu(ab);
+    } else {
+        editor_scroll();
+        editor_draw_rows(ab);
+    }
     editor_draw_status_bar(ab);
     editor_draw_message_bar(ab);
-    if (global_cfg.mode == TEXT_MODE && global_cfg.screenrows && global_cfg.screencols) {
+    if (!global_cfg.architecture_menu && global_cfg.mode == TEXT_MODE &&
+        global_cfg.screenrows && global_cfg.screencols) {
         size_t cursor_row = global_cfg.cy - global_cfg.rowoff;
         size_t cursor_col = global_cfg.rx;
         if (cursor_row >= global_cfg.screenrows)

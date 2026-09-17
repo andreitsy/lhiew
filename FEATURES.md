@@ -1,336 +1,311 @@
 # LHiew vs. Hiew — Feature Comparison
 
-Comparison of LHiew against the [Hiew Documentation Project](https://taviso.github.io/hiewdocs/index.htm),
-which documents 48 top-level shortcuts plus a number of sub-commands referenced inline.
+**LHiew audit date: 2026-09-17.** Comparison items follow the
+[Hiew Documentation Project](https://taviso.github.io/hiewdocs/index.htm).
+LHiew status is based on the current source and regression evidence linked below.
+Tables group shortcuts and repeat some capabilities in different contexts; they
+are not a count of unique shortcuts or a percentage of Hiew support.
 
-LHiew state was read from `src/` at the time of writing (`input.c` key dispatch,
-`file_buffer.c` mapping flags, `disassembler.c` Zydis setup, `render.c` drawing).
+✅ means implemented or an equivalent binding; ⚠️ means the described subset is
+implemented; ❌ means the listed command or capability is absent.
+
+Common desktop and mobile targets are the priority: **x86, ARM/Thumb/AArch64, and
+RISC-V**. Other exposed profiles remain supported through selected decoder modes,
+with limits on ISA revisions and executable variants. See the
+[architecture analysis, implementation plan, and limits](docs/architectures.md).
 
 ## Summary
 
-| | Hiew | LHiew |
+| | Hiew comparison item | LHiew |
 |---|---|---|
-| Role | Binary **editor** | Binary **viewer** (read-only `mmap`, `PROT_READ`) |
+| Role | Binary editor | Read-only binary viewer; mapping uses `PROT_READ` |
 | Views | Hex, Text, Code | Hex, Text, Code |
-| Architectures | x86 16/32/64 + others via `Shift-F1` | x86 only (Zydis), 4 decode modes |
-| Disassembly syntax | Intel | AT&T |
-| Max file size | Unlimited (sliding window) | Unlimited for viewing (demand-paged `mmap`, 8 GiB verified) |
-| Assembler | Built in, AVX | None (Zydis encoder linked but unused) |
-| Physical / logical drives | View and edit | Not supported — opens as empty |
-| Container formats parsed | NE, LE, LX, PE/PE32+, ELF/ELF64, Mach-O, TE/TE64 | None |
-| Files open at once | Many (history, `Tab`, `Ctrl-BkSp`) | One (`argv[1]`) |
-| Addressing | File offset **and** virtual address | File offset only |
-| Documented shortcuts covered | 48 | 2 equivalents (~4%) |
-| Extensibility | HEM plugins, macros, Crypt mini-assembler | None |
+| Architectures | x86 modes and architecture selection with `Shift-F1` | Zydis for x86; Capstone for selected native ISAs; Auto plus 32 manual profiles |
+| Disassembly syntax | Intel for x86 | AT&T for x86; backend syntax for other ISAs; no syntax toggle |
+| Large files | Advertised unlimited-size viewing/editing | Demand-paged whole-file mapping, within address-space and platform limits |
+| Assembler | Built-in assembly/patching | None; no byte editing, save, or assembly-text input |
+| Physical / logical drives | View and edit | Unsupported; nonregular files are rejected |
+| Executable containers | NE, LE, LX, PE/PE32+, ELF/ELF64, Mach-O, TE | Detects ELF32/64, PE32/PE32+, TE, DOS MZ, thin Mach-O32/64; selected others explicitly unsupported |
+| Files open at once | Multiple files and history | One file from `argv[1]` |
+| Addressing | File offsets and virtual-address navigation | File-offset cursor/gutter; decoders receive mapped runtime addresses; no VA goto |
+| Extensibility | HEM plugins, macros, Crypt interpreter | None |
 
-The headline gap is not any single shortcut: **Hiew is an editor with search,
-navigation and executable-format awareness; LHiew is a three-mode read-only dumper.**
+LHiew now combines a read-only viewer with architecture selection, executable
+header detection, entry navigation, and mapped disassembly addresses. Editing,
+search, arbitrary goto, symbols, and a header browser remain substantial gaps.
 
 ## Product-level capabilities
 
-The shortcut tables below come from the community docs. Hiew's own marketing feature
-list makes four broader architectural claims that cut across every shortcut. They are
-worth assessing separately, because they describe *what the program fundamentally is*
-rather than what any key does.
-
-| Claim | LHiew | One-line verdict |
+| Capability | LHiew | Current extent |
 |---|---|---|
-| View **and edit** files of unlimited size in text, hex, disassembler modes | ⚠️ half | Viewing is genuinely unlimited; editing does not exist |
-| x86-64 disassembler **& assembler**, AVX supported | ⚠️ half | Disassembler complete incl. AVX-512; no assembler |
-| Physical & logical drive view & edit | ❌ | Devices silently open as an empty file |
-| NE, LE, LX, PE/PE32+, ELF/ELF64, Mach-O, TE/TE64 formats | ❌ | No container is parsed; every file is flat bytes |
+| View and edit large files in text, hex, and code views | ⚠️ | Demand-paged viewing; no editing or sliding mapping window |
+| x86-64 disassembler and assembler, including AVX-family encodings | ⚠️ | Decoding through bundled Zydis; no assembler; no claim of exhaustive instruction validation |
+| Physical and logical drive view/edit | ❌ | Regular files only |
+| Executable-format support | ⚠️ | CPU detection, mapped regions, and entry navigation for supported containers; no header/import/export UI |
 
-### 1. Unlimited file size
+### 1. Large-file viewing and editing
 
-**What the claim is about.** This is an I/O architecture statement, not a limit constant.
-It means the program never loads the file into RAM — it keeps a window onto the file and
-pages content in as the cursor moves, so a 50 GB file opens as fast as a 50 KB one, and
-the same is true in all three view modes.
+[`read_file_in_editor()`](src/file_buffer.c) maps regular files with
+`mmap(..., PROT_READ, MAP_PRIVATE, ...)`. It does not first read the entire file
+into a heap buffer. The operating system brings mapped pages into memory as they
+are accessed. The offset gutter grows beyond eight hexadecimal digits as needed,
+and disassembly uses a viewport and bounded lookback.
 
-**Where LHiew stands — viewing: already there.** `read_file_in_editor()` maps the file with
-`mmap(..., PROT_READ, MAP_PRIVATE, fd, 0)` and never copies it. The kernel demand-pages it,
-which buys the whole property for free on 64-bit. Measured on an 8 GiB sparse file:
+The entire file must still fit in one virtual-address mapping. File-size types,
+address space, operating-system limits, and mapping failures constrain supported
+sizes, particularly on 32-bit builds. There is no sliding-window implementation,
+and this audit makes no universal file-size or opening-time guarantee.
 
-```
-num_bytes    = 8589934592 (8.00 GiB)
-offset_width = 9 hex digits     # editor_offset_width() grows automatically
-numrows      = 536870913
-open + read first and last byte: 0.5 s wall (almost all process startup)
-```
+Editing is absent. Overwrite, insert/delete, undo, save, and failure recovery all
+need an explicit edit path. A piece table or another representation of original
+and inserted spans would be useful for large-file insertion/deletion; making the
+mapping writable would not by itself supply those behaviors.
 
-Rendering scales too: `draw_row_hex`/`draw_row_disassembler` only ever touch the rows on
-screen, and offsets widen past 8 digits on their own.
+### 2. Disassembly, architectures, and assembly
 
-Real ceilings are the address space (a 32-bit build dies above ~2–3 GB, since the whole
-file must fit one mapping) and the lack of `MAP_NORESERVE`/windowing — Hiew's sliding
-window has neither limit.
+[`disassembler.c`](src/disassembler.c) uses Zydis for x86 real-16, protected-16,
+32-bit, and 64-bit modes. Zydis supplies decoding for supported AVX-family
+encodings as well as legacy x86 instructions. This is backend capability, not a
+claim that LHiew's tests cover every instruction, extension, or invalid encoding.
+Earlier ad hoc AVX examples are not an exhaustive validation suite.
 
-**Where LHiew stands — editing: absent, and it is the hard half.** Overwriting bytes in a
-huge file is easy (`PROT_WRITE` + `msync`). What the claim really promises is *insert and
-delete* in the middle of a multi-gigabyte file (Hiew's `Shift-F3`, `Ctrl-F2`, `Shift-F2`),
-which cannot be done by rewriting the file — it needs a **piece table / extent list** that
-describes the result as an ordered set of spans over the original mapping plus an edit
-buffer, flattened only on save. That data structure is the single largest architectural
-change on this list, and it would replace `global_cfg.file` as the way every module reads
-bytes.
+Capstone provides the non-x86 profiles. Priority families are ARM, Thumb,
+AArch64, and RISC-V32/64 with compressed instructions, alongside x86. Additional
+profiles cover MIPS, PowerPC, SPARC, SystemZ, M68K, eBPF, SuperH, TriCore, XCore,
+TMS320C64x, Motorola 6809, and MOS 6502. These select specific modes and revisions;
+they do not imply support for every processor or extension within a family.
+The [profile table](docs/architectures.md#implemented-profiles) gives the scope.
 
-### 2. x86-64 disassembler & assembler, AVX
+`Shift-F1` or `a` opens an architecture menu in every view. Arrows or `j`/`k` move
+the selection; Page Up/Down scroll by a menu page; Enter applies; Escape cancels.
+Auto uses supported file headers. Manual selection preserves the selected file
+byte and invalidates cached disassembly. `o` cycles x86 modes; other families use
+the architecture menu.
 
-**What the claim is about.** Two independent engines. *Decode* (bytes → text) is what a
-viewer needs; *encode* (text → bytes) is what makes patching practical — you type
-`jmp 0x401000` or `nop` and the editor writes the opcodes. AVX matters because VEX and
-EVEX prefixes are variable-length and heavily re-use opcode space; a decoder that predates
-them mis-decodes modern code and then desynchronizes for the rest of the screen.
+Raw files cannot identify an ISA reliably. They retain the default x86 viewing
+behavior until a profile is chosen; Auto on raw input uses x86-32. The assembly
+status identifies raw fallback when space permits. Unknown and malformed headers
+remain inspectable and show an explicit unsupported state instead of claiming a
+detected CPU. The menu explains the detection result.
 
-**Disassembler: complete, AVX included.** Verified by driving `disassemble_block()` directly
-with hand-encoded instructions in 64-bit mode:
+The selected instruction is centered when enough preceding instructions exist.
+Page Up/Down moves by a screen of decoded instructions, with file-boundary
+clamping. Invalid or truncated encodings produce `db XX` rows so navigation can
+continue. Backward decoding remains heuristic without a known boundary within
+the lookback. ARM/Thumb interworking and mapping symbols are not tracked;
+mixed-mode locations require manual selection.
 
-| Bytes | Extension | LHiew output |
+**Assembly and editing remain missing.** Zydis's encoder is present in the
+dependency but unused by the application. There is no instruction-input line,
+patch operation, writable edit buffer, save command, or undo history. Selecting
+an architecture changes decoding only. x86 output remains AT&T rather than Intel.
+
+### 3. Physical and logical drives
+
+Drive access is not implemented. [`file_buffer.c`](src/file_buffer.c) rejects
+nonregular files and terminates on `fstat` errors. The earlier bugs that continued
+after the regular-file check and printed an ordinary `stdout` diagnostic in raw
+terminal mode are fixed; devices are no longer treated as empty files.
+
+Drive support would need platform-specific device sizing and an appropriate
+access strategy. Writable access would additionally need an explicit write model
+and error recovery. Regular disk-image files can already be opened, but no
+filesystem or partition browser is provided.
+
+### 4. Executable containers and addresses
+
+[`binary.c`](src/binary.c) validates container metadata and identifies supported
+CPUs, file-backed regions, and an entry location. The file-offset cursor remains
+canonical. [`architecture.c`](src/architecture.c) applies detected or manual
+profiles and exposes region mappings to the disassembler.
+
+| Container | Current behavior | Remaining limits |
 |---|---|---|
-| `c5 ec 58 d9` | AVX (VEX.256) | `vaddps %ymm1, %ymm2, %ymm3` |
-| `c4 e2 7d 58 c1` | AVX2 | `vpbroadcastd %xmm1, %ymm0` |
-| `c4 e2 6d 98 d9` | FMA | `vfmadd132ps %ymm1, %ymm2, %ymm3` |
-| `62 f1 6c 48 58 d9` | AVX-512 (EVEX) | `vaddps %zmm1, %zmm2, %zmm3` |
-| `62 f1 7e c9 6f c1` | AVX-512 masking | `vmovdqu32 %zmm1, %zmm0 {%k1} {z}` |
-| `62 f2 7d 49 92 14 08` | AVX-512 VSIB gather | `vgatherdpsl (%rax,%zmm1,1), %zmm2 {%k1}` |
+| ELF32 / ELF64 | Detect CPU/mode/byte order; parse program/section mappings; resolve entry or an executable region | No symbols, relocation application, or header browser; selected mixed-mode variants unsupported |
+| PE32 / PE32+ | Detect COFF machine; parse sections/image base; map entry RVA to file offset | No imports/exports UI; ARM64EC/ARM64X hybrid decoding unsupported |
+| TE | Detect machine and map sections/entry with stripped-header adjustment | No firmware-volume or UEFI metadata browser |
+| Thin Mach-O32 / Mach-O64 | Detect CPU/byte order; map sections/segments and LC_MAIN entry | No full LC_UNIXTHREAD entry decoder or symbol browser; executable-region fallback where available |
+| DOS MZ | Select real-16 and resolve header/CS:IP entry | No DOS loader emulation or relocation application |
+| Universal Mach-O | Recognize and validate slice table, report unsupported | No slice chooser or per-slice state |
+| NE / LE / LX | Recognize as unsupported | No executable mapping or decoding-mode inference for these formats |
+| Raw binaries / unrecognized containers | Permit byte viewing and manual ISA selection | No reliable automatic CPU identification or load-address mapping |
 
-Instruction lengths came back correct in every case, so the row boundaries that paging and
-cursor movement depend on stay in sync. Zydis is also strict about encoding rules — a gather
-using the same register as destination and index (`#UD`) is correctly rejected as `db 62`
-rather than silently decoded.
+Entering assembly view from file offset zero jumps to the mapped entry, or to
+the first file-backed executable region when the parser supplies that fallback.
+`e` opens the same location directly. A file without a usable entry remains at
+its current offset. The fallback is a viewing location, not a claim about where
+the program will execute.
 
-Two deliberate divergences remain: LHiew formats **AT&T** where Hiew uses Intel
-(`ZYDIS_FORMATTER_STYLE_ATT` in `disassembler.c`, a one-line change to expose as a toggle),
-and LHiew is x86-only, with no equivalent of Hiew's `Shift-F1` architecture switch.
+For mapped instructions, decoders receive the region's runtime address. x86,
+ARM, and AArch64 branch operands formatted as absolute targets can therefore
+reflect executable virtual addresses instead of file-relative targets. Backend
+formatting is retained: for example, Capstone's RISC-V `jal 8` is a relative
+operand even when decoding receives a mapped address. **The gutter and cursor
+still use file offsets.** There is no VA/RVA gutter, virtual-address goto,
+branch-follow command, symbol lookup, or relocation application. Raw and
+unmapped bytes use file offsets as decoder addresses.
 
-**Assembler: missing, but the engine is already linked in.** Zydis 4.0.0 ships an encoder
-(`deps/zydis/include/Zydis/Encoder.h`, compiled into the `libZydis.a` LHiew already links).
-Nothing calls it. The gap is therefore not the encoding engine but everything around it:
-an input line, edit mode, and a writable buffer. It only becomes useful after §1's edit
-path exists.
-
-### 3. Physical & logical drive view & edit
-
-**What the claim is about.** Treating a raw block device as a file — *physical* drive means
-the whole disk including partition table and boot sector (`/dev/sda`, `/dev/nvme0n1`),
-*logical* means a single filesystem volume (`/dev/sda1`, an LVM or device-mapper node).
-This is what makes an editor usable for boot sectors, partition recovery, and filesystem
-forensics.
-
-**Where LHiew stands: not supported, and it fails quietly.** `read_file_in_editor()` checks
-`S_ISREG` — but on failure it only prints and then carries on:
-
-```c
-if ((fstat(fd, &stbuf) != 0) || (!S_ISREG(stbuf.st_mode))) {
-    printf("Cannot open file!\n");     /* no return */
-}
-global_cfg.num_bytes = stbuf.st_size;
-```
-
-Because `fstat` reports `st_size == 0` for block and character devices, execution reaches the
-`if (!global_cfg.num_bytes)` early return and the editor comes up showing its empty-file
-welcome screen. Observed on `/dev/zero`:
-
-```
-Cannot open file!
-num_bytes = 0    mmap ptr = 0x0    numrows = 0
-```
-
-Two separate defects are visible here: the guard does not stop execution, and the message
-goes to `stdout` with `printf` while the terminal is in raw mode — violating the
-"all drawing goes through `append_buffer`" invariant in `CLAUDE.md`, so it corrupts the frame.
-
-Supporting drives properly needs: accepting `S_ISBLK`, getting the real size from
-`ioctl(fd, BLKGETSIZE64, &sz)` instead of `st_size`, sector-aligned access, and — for the
-edit half — write-back at sector granularity. It also implies running as root, which is a
-UX and safety question (a stray keypress on `/dev/sda` is unrecoverable) worth settling
-before any of it is built.
-
-### 4. Executable format support
-
-**What the claim is about.** Parsing the *container* around the code, which yields four
-things a flat hex viewer cannot: the **entry point** (where to start disassembling), the
-**section/segment table** (which ranges are code vs data), **imports and exports** (which
-library functions are called), and above all the **virtual-address ↔ file-offset mapping**.
-That last one is what makes disassembly correct rather than merely plausible.
-
-The named formats span forty years of executable history:
-
-| Format | Origin | Relevance to a Linux clone |
-|---|---|---|
-| **NE** | New Executable — 16-bit Windows / OS2 | legacy |
-| **LE / LX** | Linear Executable — OS/2 2.x, VxD drivers, DOS extenders | legacy |
-| **PE / PE32+** | Portable Executable, 32- and 64-bit Windows | high — malware and cross-platform RE |
-| **ELF / ELF64** | Unix, Linux, BSD | **highest** — the native case |
-| **Mach-O** | macOS, iOS | medium |
-| **TE / TE64** | Terse Executable — UEFI firmware images | niche but uniquely poorly served elsewhere |
-
-**Where LHiew stands: nothing is parsed.** There is no format detection anywhere in `src/`.
-A file is a byte array, the disassembler always starts from a heuristic lookback point
-rather than a known entry point, and offsets are the only addressing.
-
-The cost of this shows up concretely in branch targets. `disassemble_block()` passes the
-**file offset** as Zydis's `runtime_address` argument:
-
-```c
-ZydisFormatterFormatInstruction(..., format_buffer, sizeof(format_buffer),
-                                read_offset, ZYAN_NULL);
-```
-
-so a `call` at file offset 0 prints:
-
-```
-offset 0: call 0x0000000000000005
-offset 5: jmp  0x000000000000001A
-```
-
-For a typical `x86-64` ELF loaded at base `0x400000`, every absolute target shown is wrong
-by the image base, and none of them can be cross-referenced against a symbol table or a
-disassembly from any other tool. Adding just an ELF64 parser — program headers for the
-`p_vaddr`/`p_offset` mapping, `e_entry`, plus the section table — fixes the addressing for
-the native platform and is the prerequisite for xrefs (`F6`), branch following (`1`–`9`),
-and the Names window (`F12`).
+The parser does not classify all bytes as code or data. Navigation into headers
+or data still attempts disassembly under the selected profile. Packed/encrypted
+payloads, embedded VM bytecode, mixed architectures, and additional ISA revisions
+need separate handling. See [explicit limits and follow-up work](docs/architectures.md#explicit-limits-and-follow-up-work).
 
 ## What LHiew already has
 
 | Capability | Hiew key | LHiew key | Notes |
 |---|---|---|---|
-| Switch Hex / Text / Code view | `Enter`, `F4` menu | `m` (next), `Ctrl-M` (prev) | Equivalent behaviour, different binding; no `F4`-style picker menu |
-| Change opcode size (16/32/64) | `Ctrl-F1` | `o` | LHiew cycles 4 modes: real-16, compat-16, compat-32, long-64 |
-| Cursor movement | arrows | arrows + `h` `j` `k` `l` | vi-style keys are an LHiew addition |
+| Switch Hex / Text / Code view | `Enter`, `F4` menu | `m` next, `Ctrl-M` previous | Cycles views; no view-picker menu |
+| Change x86 opcode size | `Ctrl-F1` | `o` | real-16, protected-16, 32, 64; sets a manual architecture choice |
+| Choose architecture | `Shift-F1` | `Shift-F1` or `a` | Auto plus 32 manual profiles; supported terminal sequence variants |
+| Open entry location | Within executable header UI | `e` | Detected entry or executable-region fallback; no header UI |
+| Cursor movement | arrows | arrows plus `h` `j` `k` `l` | File-byte cursor preserved through view changes and resize |
 | Page up/down | `PgUp` / `PgDn` | `PgUp` / `PgDn` | Instruction-aware paging in code view |
-| Hex dump with ASCII pane | — | built-in | Offset + hex + ASCII, selected byte highlighted |
-| Disassembly view | — | built-in | Zydis, AT&T, invalid bytes shown as `db XX` |
-| Status bar (file, mode, offset) | partly `Ctrl-Alt` | built-in | Offsets shown in **decimal** unless narrow; Hiew is hex-first |
-| Quit | `Esc` / `F10` | `Ctrl-Q` | |
-| Live terminal resize | n/a (DOS/console) | built-in | Min 24x5, reflows and preserves `cur_byte` |
-
-LHiew extras with no Hiew counterpart: vi-style `hjkl`, automatic reflow on terminal resize,
-and a partially automatic disassembly re-sync (bounded lookback in `disassemble_block`).
+| Hex dump with ASCII pane | — | built-in | Offset, hex, ASCII, and selected-byte highlight |
+| Centered disassembly | — | built-in | Context above/below selected instruction where available |
+| Status bar | partly `Ctrl-Alt` | built-in | Filename, mode, offset, and architecture selection state when space permits |
+| Quit | `Esc` / `F10` | `Ctrl-Q` | Also works inside architecture menu |
+| Live terminal resize | — | built-in | Minimum 24×5; clipped content/menus; navigation pauses below minimum |
 
 ## Category 1 — Working with blocks
 
-**Implemented: 0 / 13.** LHiew has no selection concept at all.
+**No block commands are implemented.** LHiew highlights a selected byte or
+instruction, but has no multi-byte range selection or marked-block state.
 
 | Key | Feature | Status |
 |---|---|---|
-| `*` | Mark/unmark block (visual-mode style selection) | ❌ |
+| `*` | Mark/unmark block | ❌ |
 | `Ctrl-*` | Add whole file to block | ❌ |
 | `Alt-*` | Resize block to current offset | ❌ |
-| `Alt-M` | Assign colour to block (persisted in `.cmarkers`) | ❌ |
+| `Alt-M` | Assign block colour, persisted in `.cmarkers` | ❌ |
 | `Shift-Alt-M` | Assign random colour | ❌ |
 | `Alt-N` | Jump to next/previous marked block | ❌ |
-| `[` / `]` | Move to block start / end | ❌ |
+| `[` / `]` | Move to block start/end | ❌ |
 | `Ins` | Toggle insert/overwrite mode | ❌ |
 | `F2` | Write block to file | ❌ |
-| `Ctrl-F2` | Read block from file (insert or overwrite) | ❌ |
-| `Alt-F2` | Fill block with pattern / NOP current instruction | ❌ |
+| `Ctrl-F2` | Read block from file, insert or overwrite | ❌ |
+| `Alt-F2` | Fill block with pattern or NOP current instruction | ❌ |
 | `Shift-F2` | Delete block and truncate file | ❌ |
-| `Shift-F5` / `Shift-F6` | Copy / move block | ❌ |
+| `Shift-F5` / `Shift-F6` | Copy/move block | ❌ |
 | `Shift-F4` | Print block to file or clipboard | ❌ |
 
 ## Category 2 — Navigating around files
 
-**Implemented: 1 / 20** (mode switching). The two most-missed for a viewer are `F5` goto and `F7` search.
+View cycling, cursor movement, paging, and direct entry navigation are available.
+General offset/address goto and search are still missing.
 
 | Key | Feature | Status |
 |---|---|---|
-| `F5` | **Goto offset** — absolute, `+`/`-` relative, `.address` virtual, hex default with `t` decimal suffix | ❌ |
-| `F7` | **Search** — hex bytes, string, or assembled instruction; `Tab` toggles entry mode | ❌ |
+| `F5` | Goto offset: absolute, relative, virtual address, hex/decimal input | ❌; `e` is a fixed entry shortcut, not arbitrary goto |
+| `F7` | Search bytes, strings, or assembled instructions | ❌ |
 | `Ctrl-Enter` / `Shift-F7` | Repeat last search | ❌ |
 | `Alt-F7` | Toggle search direction | ❌ |
-| `Alt-F8` | Translation table / string encoding (ASCII vs UTF-16) | ❌ |
-| `Alt-F6` | Strings dialog (min length, encoding, offsets, filter) | ❌ |
-| `F6` / `Ctrl-F6` | Find code references (xrefs) to current location | ❌ |
-| `Ctrl-Home` / `Ctrl-End` | Jump to start / end of file | ❌ — no `Home`/`End` decoding in `editor_read_key` |
-| `BkSp` | Return to previous location (jump history) | ❌ |
-| `+` `-` `Alt--` `Alt-0` `Alt-1..8` | Bookmark stack (8 slots, per-view) | ❌ |
-| `Ctrl-.` / `Ctrl-0..8` | Record and play macros | ❌ |
+| `Alt-F8` | Translation table / string encoding | ❌ |
+| `Alt-F6` | Strings dialog with length/encoding/offset/filter controls | ❌ |
+| `F6` / `Ctrl-F6` | Find code references to current location | ❌ |
+| `Ctrl-Home` / `Ctrl-End` | Jump to start/end of file | ❌; no Home/End key action |
+| `BkSp` | Return to previous location | ❌ |
+| `+` `-` `Alt--` `Alt-0` `Alt-1..8` | Bookmark stack | ❌ |
+| `Ctrl-.` / `Ctrl-0..8` | Record/play macros | ❌ |
 | `;` | Comment current location | ❌ |
-| `F12` / `Shift-F12` | Names window; name a location; import/export symbols | ❌ |
-| `Enter`, `F4` | Cycle / pick view mode | ✅ as `m`, `Ctrl-M` (no menu) |
-| `Esc` | Exit without touching timestamp | ❌ (`Ctrl-Q` only) |
-| `Tab`, `Ctrl-BkSp`, `Ctrl-F11`/`F12`, `F9` | Multi-file: history, file manager, next/prev argv file, open file | ❌ — single `argv[1]` |
-| `Alt-=` | 64-bit programmer calculator with `@B/@W/@D/@Q/@o/@O` cursor reads | ❌ |
-| `Ctrl-Alt` | File/system info (full path, size, last error) | ❌ |
-| `Alt-P` | Text screenshot of current screen | ❌ |
+| `F12` / `Shift-F12` | Names window; name locations; import/export symbols | ❌ |
+| `Enter`, `F4` | Cycle or pick view mode | ⚠️ cycling via `m`/`Ctrl-M`; no view-picker menu |
+| `Esc` | Exit without touching timestamp | ❌ as a binding; Escape cancels architecture menu, `Ctrl-Q` quits |
+| `Tab`, `Ctrl-BkSp`, `Ctrl-F11`/`F12`, `F9` | File history/manager, next/previous argument, open file | ❌; one `argv[1]` file |
+| `Alt-=` | Programmer calculator with cursor-relative reads | ❌ |
+| `Ctrl-Alt` | File/system information panel | ⚠️ basic status bar only; no dedicated information panel |
+| `Alt-P` | Text screenshot command | ❌; repository screenshots are captured externally |
 | `Alt-B` | Toggle beeps | ❌ |
 
 ## Category 3 — Features specific to executables
 
-**Implemented: 1 / 7.** LHiew treats every file as a flat byte stream — it never parses a container format.
+CPU selection, container detection, entry navigation, and mapped instruction
+addresses are implemented. Header editing and higher-level analysis are not.
 
 | Key | Feature | Status |
 |---|---|---|
-| `F8` | Header viewer/editor for PE / ELF / Mach-O, with `F5` entry point, `F6` sections, `F7` imports, `F9` exports | ❌ |
-| `1`–`9`, `A` | Follow `jmp`/`call` branch targets, with ↑/↓ direction markers | ❌ |
-| `/` | Re-synchronize disassembly from cursor | ⚠️ automatic lookback heuristic only, no user-forced resync |
-| `Ctrl-F1` | Cycle opcode size | ✅ as `o` |
-| `Shift-F1` | Change architecture (e.g. ARM) | ❌ — x86 only |
-| `Alt-F3` / `Ctrl-F7` | Crypt dialog (mini x86 interpreter to transform data) | ❌ |
+| `F8` | Header viewer/editor with entry, section, import, and export navigation | ⚠️ detection/mapping and `e` entry shortcut; no `F8` UI, section browser, imports, or exports |
+| `1`–`9`, `A` | Follow branch/call targets and show direction markers | ❌; mapped operand text does not provide navigation |
+| `/` | Re-synchronize disassembly from cursor | ⚠️ bounded lookback, cached boundaries, and ISA alignment; no forced-resync command |
+| `Ctrl-F1` | Cycle opcode size | ✅ equivalent `o` for x86 |
+| `Shift-F1` | Change architecture | ✅ architecture menu; `a` fallback; ISA/mode limits apply |
+| `Alt-F3` / `Ctrl-F7` | Crypt dialog / instruction interpreter for data transforms | ❌ |
 | `F11` | HEM plugin menu | ❌ |
-| — | Virtual address / RVA display alongside file offsets | ❌ |
+| — | VA/RVA display beside file offsets | ❌ gutter remains file-offset based; decoders use mapped runtime addresses where available |
 
 ## Editing — the structural gap
 
-Hiew's edit path has no LHiew counterpart: `src/file_buffer.c` opens with `"rb"` and maps
-`PROT_READ, MAP_PRIVATE`, so nothing can be written back.
+[`file_buffer.c`](src/file_buffer.c) opens files with `"rb"` and maps them with
+`PROT_READ, MAP_PRIVATE`. No application command writes modified file contents.
 
 | Key | Feature | Status |
 |---|---|---|
-| `F3` | Enter edit mode (caret cursor, `Tab` between hex/char, or opcode/assembler in code view) | ❌ |
-| `Shift-F3` | Insert N zero bytes, extending the file | ❌ |
+| `F3` | Enter edit mode; switch hex/character/opcode input | ❌ |
+| `Shift-F3` | Insert zero bytes, extending file | ❌ |
 | `F9` | Save changes | ❌ |
 | `F10` | Exit and update timestamp | ❌ |
-| `Ins` | Insert vs. overwrite | ❌ |
-| — | Inline assembler (type an instruction, get bytes) | ❌ |
+| `Ins` | Insert versus overwrite | ❌ |
+| — | Inline assembler: instruction text to patched bytes | ❌ |
 
 ## Suggested order of work
 
-Ranked by value-per-effort for a read-only viewer, before any editing work is attempted:
+Priorities favor useful inspection of common desktop/mobile binaries before
+expanding less common CPU families or introducing file mutation.
 
-1. **`Ctrl-Home` / `Ctrl-End`** — currently unreachable; needs `Home`/`End` cases in `editor_read_key`
-   alongside the existing `[3~`/`[5~`/`[6~` handling. Smallest possible win.
-2. **`F5` goto offset** — requires a prompt/input line in `render.c` (the message bar can host it)
-   and a number parser. Unlocks the whole "type a number, go there" workflow.
-3. **`F7` search + `Ctrl-Enter` repeat** — hex and ASCII over the existing mmap; the single
-   biggest functional gap for inspecting binaries.
-4. **`BkSp` jump history + `+`/`-` bookmarks** — cheap once 2 and 3 exist, since both are just
-   a stack of `cur_byte` values.
-5. **ELF64 parsing (`F8`)** — promoted, because it is not just a header viewer: the
-   `p_vaddr`/`p_offset` mapping is what makes disassembly addresses correct at all
-   (see §4 above), and it is the prerequisite for items 6, `F6` xrefs and `F12` names.
-6. **Branch following (`1`–`9`) and `/` resync** — Zydis already yields branch targets in the
-   decoded operands, so this is mostly plumbing in `disassembler.c`/`render.c`.
-7. **Block marking (`*`, `[`, `]`, `F2` write block)** — read-only subset of Hiew's block commands;
-   no file mutation required.
-8. **Block-device support** — accept `S_ISBLK`, size via `BLKGETSIZE64`, sector-aligned reads.
-   Small in code, but settle the root-privileges and accidental-write questions first.
-9. **Edit mode (`F3`/`F9`) and the assembler** — the largest change: replaces the plain mmap
-   with a piece table if insert/delete are wanted, plus save/undo semantics. The Zydis
-   encoder needed for the assembler half is already linked in.
+1. **Deepen x86, ARM/Thumb/AArch64, and RISC-V coverage.** Add representative
+   compiler output and executable variants, make decoder revision limits explicit,
+   and address mixed-mode ARM and common hybrid/fat containers. Keep secondary
+   profiles supported without presenting them as exhaustive ISA coverage.
+2. **General navigation.** Add file-offset/VA goto and Home/End, then jump history
+   and bookmarks. Reuse region mappings and report unmapped addresses.
+3. **Search.** Add byte/string search, repeat, and direction controls; define
+   behavior for large mapped files and encoding choices.
+4. **Header and region browser.** Expose parsed headers, entry, sections/segments,
+   and mapping information. Parsing exists; UI and broader format handling remain.
+   Symbols, imports, exports, and relocations need their own parsing/navigation.
+5. **Branch following and explicit resynchronization.** Preserve target metadata,
+   map targets back to file offsets, and add jump history. Account for indirect
+   branches and instruction-mode changes; formatted operands alone are not enough.
+6. **Block selection and export.** Add read-only range marking, range navigation,
+   and export to a separate file before introducing in-place edits.
+7. **Device and mapping-window support.** Add platform-specific read-only device
+   access if needed and sliding mappings for files that cannot fit one mapping.
+8. **Editing and assembly.** Define overwrite/insert/delete, undo, safe save, and
+   failure recovery before connecting an encoder to an instruction-input UI.
+   This changes LHiew's current read-only contract.
 
-Items 1–8 fit LHiew's existing read-only architecture. Item 9 changes it.
+## Regression evidence and limits
 
-### Defects found while comparing
+- [`tests/test_binary.c`](tests/test_binary.c) checks parser bounds, malformed and
+  unsupported headers, executable mappings, entries, and container details.
+- [`tests/test_architectures.c`](tests/test_architectures.c) loads deterministic
+  files and checks exposed profiles, detected modes, mapped branch operands,
+  override/Auto, invalid data, and navigation across instruction lengths.
+- [`tests/architecture_fixtures/generate.py`](tests/architecture_fixtures/generate.py)
+  reproduces serialized fixtures; `--check` verifies their bytes.
+- [`tests/test_disassembler.c`](tests/test_disassembler.c) and
+  [`tests/test_input.c`](tests/test_input.c) cover centering, boundaries, resize,
+  cursor preservation, and instruction-aware paging.
+- [`tests/test_terminal_resize.py`](tests/test_terminal_resize.py) exercises actual
+  key sequences, Shift-F1 variants, menu apply/cancel/pages, entry jumps, common
+  non-x86 detection, unsupported status, and resize.
+- [`tests/test_file_buffer.c`](tests/test_file_buffer.c) checks ordinary file
+  opening, read-only mapping, and empty files.
 
-Two bugs surfaced during this analysis, both in `read_file_in_editor()` (`src/file_buffer.c:13`):
-
-- The `S_ISREG`/`fstat` guard **prints but does not return**, so a rejected file keeps going
-  and is treated as empty rather than refused.
-- That diagnostic uses `printf` to `stdout` while the terminal is in raw mode, which breaks
-  the single-`write()` frame invariant documented in `CLAUDE.md`.
+These are targeted regressions using bounded fixtures. They do not establish
+complete ISA/container coverage, all-file-size support, editing support, or
+Hiew equivalence. Run the full CTest suite for the current result; this document
+does not freeze a test count or pass percentage.
 
 ## Notes on fidelity
 
-Small divergences from Hiew's conventions worth deciding on deliberately:
-
-- **Offsets are decimal** in the wide status bar (`"%s %zu:%zu"` in `editor_draw_status_bar`);
-  Hiew is hex-first everywhere, with `t` marking decimal.
-- **AT&T syntax** where Hiew uses Intel. A toggle would be a one-line Zydis formatter change
-  (`ZYDIS_FORMATTER_STYLE_ATT` → `..._INTEL` in `disassembler.c`).
-- **Branch targets are file offsets, not virtual addresses** — `disassemble_block()` passes
-  `read_offset` as Zydis's `runtime_address`. Correct only for flat binaries; wrong by the
-  image base for any ELF. Fixed by item 5 above.
-- **`DEL_KEY` is decoded but never dispatched** (`terminal.c:61`, unused in `input.c`) — a free
-  keybinding slot already wired up.
+- Status normally shows decimal cursor offset/file size; the gutter uses hex file
+  offsets, and a narrow status may fall back to hex.
+- x86 disassembly uses AT&T syntax; there is no Intel/AT&T preference yet.
+- Decoders receive mapped runtime addresses where available, with native operand
+  formatting retained. Cursor, gutter, paging, and selection still use file bytes.
+- `Ctrl-M` commonly arrives as the same byte as Enter. Outside the architecture
+  menu it cycles backward through views; inside it applies the menu choice.
+- Shift-F1 terminal encodings vary. Supported complete CSI forms are accepted;
+  `a` is the fallback. Escape only cancels the architecture menu.
+- `DEL_KEY` is decoded but has no dispatched action. Keyboard recognition alone
+  does not imply an editing feature.
