@@ -166,3 +166,10 @@ addresses, override/Auto, invalid/truncated data, resize, centering and paging.
 `test_binary.c` covers parser truncation, corrupt tables, unsupported CPUs and
 formats, arithmetic boundaries and container-specific details. PTY tests verify
 real Shift-F1 sequences, menu navigation/cancellation, entry navigation and resize.
+
+The detector and import parsers share bounded byte readers and primary NLM
+header validation. Profile labels and selection share one lookup, and each
+disassembly frame caches alignment/detection metadata while checking every
+instruction against mapped region boundaries. Regression tests also cover
+invalid profile indices and stale mapping/size metadata. Run these tests with
+[strict Debug, Release and sanitizer builds](development.md#build-and-test).

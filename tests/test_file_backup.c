@@ -20,9 +20,8 @@ static void cleanup(void) {
             struct dirent *entry;
             while ((entry = readdir(dir))) {
                 if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
-                char path[512];
-                snprintf(path, sizeof(path), "%s/%s", directory, entry->d_name);
-                if (unlink(path) != 0) rmdir(path);
+                if (unlinkat(dirfd(dir), entry->d_name, 0) != 0)
+                    unlinkat(dirfd(dir), entry->d_name, AT_REMOVEDIR);
             }
             closedir(dir);
         }
@@ -179,6 +178,40 @@ static void test_backup_empty_source_and_invalid_arguments(void) {
     ASSERT(!file_backup_ensure(source_path, -1));
 }
 
+static void test_backup_rejects_nonregular_source_and_dangling_destination(void) {
+    ASSERT(setup());
+    int device = open("/dev/null", O_RDONLY);
+    ASSERT(device >= 0);
+    ASSERT(!file_backup_ensure("/dev/null", device));
+    ASSERT_EQ(errno, EINVAL);
+    close(device);
+    ASSERT_EQ(symlink(moved_path, backup_path), 0);
+    ASSERT(!file_backup_ensure(source_path, source_fd));
+    ASSERT_EQ(errno, EINVAL);
+    struct stat st;
+    ASSERT_EQ(lstat(backup_path, &st), 0);
+    ASSERT(S_ISLNK(st.st_mode));
+    ASSERT_EQ(temporary_files(), 0);
+}
+
+static void test_backup_preserves_all_zero_file_size(void) {
+    ASSERT(setup());
+    off_t size = 64 * 1024 + 7;
+    ASSERT_EQ(ftruncate(source_fd, size), 0);
+    ASSERT(file_backup_ensure(source_path, source_fd));
+    int backup = open(backup_path, O_RDONLY);
+    ASSERT(backup >= 0);
+    struct stat st;
+    ASSERT_EQ(fstat(backup, &st), 0);
+    ASSERT_EQ(st.st_size, size);
+    unsigned char last = 1;
+    ASSERT_EQ(pread(backup, &last, 1, size - 1), 1);
+    ASSERT_EQ(last, 0);
+    ASSERT_EQ(pread(backup, &last, 1, size), 0);
+    close(backup);
+    ASSERT_EQ(temporary_files(), 0);
+}
+
 int main(void) {
     RUN_TEST(test_backup_exact_bytes_and_file_position);
     RUN_TEST(test_backup_keeps_first_original_across_sessions);
@@ -187,6 +220,8 @@ int main(void) {
     RUN_TEST(test_backup_refuses_replaced_source_path);
     RUN_TEST(test_backup_sparse_file_beyond_four_gib);
     RUN_TEST(test_backup_empty_source_and_invalid_arguments);
+    RUN_TEST(test_backup_rejects_nonregular_source_and_dangling_destination);
+    RUN_TEST(test_backup_preserves_all_zero_file_size);
     cleanup();
     TEST_REPORT();
 }

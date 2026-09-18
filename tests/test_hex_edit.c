@@ -17,6 +17,12 @@ static int interrupt_write, interrupt_read, interrupt_sync, short_read, zero_wri
 static char test_path[64];
 static int test_fd = -1;
 
+/* Fault-injection entry points compiled into hex_edit_test_backend. */
+ssize_t hex_test_pwrite(int fd, const void *buffer, size_t size, off_t offset);
+ssize_t hex_test_pread(int fd, void *buffer, size_t size, off_t offset);
+int hex_test_fsync(int fd);
+void *hex_test_realloc(void *pointer, size_t size);
+
 ssize_t hex_test_pwrite(int fd, const void *buffer, size_t size, off_t offset) {
     write_calls++;
     if (interrupt_write) {
@@ -436,6 +442,85 @@ static void test_multi_field_patch_is_atomic_on_invalid_span_and_allocation_fail
     ASSERT_EQ(disk_byte(0), 1);
 }
 
+static void test_empty_and_null_patch_spans(void) {
+    const uint8_t bytes[] = {1, 2, 3};
+    ASSERT(open_bytes(bytes, sizeof(bytes)));
+    ASSERT(hex_edit_begin());
+    ASSERT(!hex_edit_patch(NULL, 1));
+    ASSERT(hex_edit_patch(NULL, 0));
+    hexPatch patch = {sizeof(bytes), NULL, 0};
+    fail_allocation = 1;
+    ASSERT(hex_edit_patch(&patch, 1));
+    patch.length = 1;
+    ASSERT(!hex_edit_patch(&patch, 1));
+    patch.offset = SIZE_MAX;
+    patch.length = 0;
+    ASSERT(!hex_edit_patch(&patch, 1));
+    fail_allocation = 0;
+    ASSERT_EQ(hex_edit_dirty_count(), 0u);
+    ASSERT_EQ(memcmp(global_cfg.file, bytes, sizeof(bytes)), 0);
+}
+
+static void test_overlapping_patches_preserve_sorted_edits(void) {
+    const uint8_t bytes[] = {1, 2, 3, 4, 5};
+    const uint8_t first[] = {8, 9, 10}, second[] = {2, 7};
+    ASSERT(open_bytes(bytes, sizeof(bytes)));
+    ASSERT(hex_edit_begin());
+    ASSERT(hex_edit_set_byte(4, 6));
+    hexPatch patches[] = {{0, first, sizeof(first)}, {1, second, sizeof(second)}};
+    ASSERT(hex_edit_patch(patches, 2));
+    const uint8_t expected[] = {8, 2, 7, 4, 6};
+    ASSERT_EQ(memcmp(global_cfg.file, expected, sizeof(expected)), 0);
+    ASSERT_EQ(hex_edit_dirty_count(), 3u);
+    patches[1].offset = SIZE_MAX;
+    ASSERT(!hex_edit_patch(patches, 2));
+    ASSERT_EQ(memcmp(global_cfg.file, expected, sizeof(expected)), 0);
+    ASSERT_EQ(hex_edit_dirty_count(), 3u);
+    ASSERT(hex_edit_save());
+    ASSERT_EQ(write_calls, 3);
+    for (size_t i = 0; i < sizeof(expected); ++i)
+        ASSERT_EQ(disk_byte(i), expected[i]);
+}
+
+static void test_reedit_after_failed_sync_preserves_original_until_retry(void) {
+    const uint8_t bytes[] = {1, 2};
+    ASSERT(open_bytes(bytes, sizeof(bytes)));
+    ASSERT(hex_edit_begin());
+    ASSERT(hex_edit_set_byte(0, 9));
+    fail_sync = 1;
+    ASSERT(!hex_edit_save());
+    ASSERT(hex_edit_set_byte(0, 1));
+    ASSERT_EQ(hex_edit_dirty_count(), 1u);
+    ASSERT_EQ(disk_byte(0), 9);
+    fail_sync = 0;
+    ASSERT(hex_edit_save());
+    ASSERT_EQ(disk_byte(0), 1);
+    ASSERT_EQ(hex_edit_dirty_count(), 0u);
+    ASSERT_EQ(write_calls, 2);
+}
+
+static void test_failed_patch_growth_preserves_pending_edits(void) {
+    uint8_t bytes[256] = {0}, replacement[256];
+    memset(replacement, 7, sizeof(replacement));
+    ASSERT(open_bytes(bytes, sizeof(bytes)));
+    ASSERT(hex_edit_begin());
+    ASSERT(hex_edit_set_byte(100, 9));
+    hexPatch patch = {0, replacement, sizeof(replacement)};
+    fail_allocation = 1;
+    ASSERT(!hex_edit_patch(&patch, 1));
+    ASSERT_EQ(hex_edit_dirty_count(), 1u);
+    bytes[100] = 9;
+    ASSERT_EQ(memcmp(global_cfg.file, bytes, sizeof(bytes)), 0);
+    ASSERT_EQ(disk_byte(100), 0);
+    fail_allocation = 0;
+    ASSERT(hex_edit_patch(&patch, 1));
+    ASSERT_EQ(hex_edit_dirty_count(), sizeof(replacement));
+    ASSERT_EQ(memcmp(global_cfg.file, replacement, sizeof(replacement)), 0);
+    ASSERT(hex_edit_save());
+    ASSERT_EQ(hex_edit_dirty_count(), 0u);
+    ASSERT_EQ(disk_byte(100), 7);
+}
+
 int main(void) {
     printf("test_hex_edit:\n");
     RUN_TEST(test_private_edits_save_only_changed_bytes);
@@ -455,6 +540,10 @@ int main(void) {
     RUN_TEST(test_backup_precedes_edits_and_survives_save);
     RUN_TEST(test_failed_backup_refuses_editing_without_mutation);
     RUN_TEST(test_multi_field_patch_is_atomic_on_invalid_span_and_allocation_failure);
+    RUN_TEST(test_empty_and_null_patch_spans);
+    RUN_TEST(test_overlapping_patches_preserve_sorted_edits);
+    RUN_TEST(test_reedit_after_failed_sync_preserves_original_until_retry);
+    RUN_TEST(test_failed_patch_growth_preserves_pending_edits);
     cleanup();
     TEST_REPORT();
 }

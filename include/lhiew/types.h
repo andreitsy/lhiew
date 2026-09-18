@@ -11,7 +11,6 @@
 #include <termios.h>
 #include <time.h>
 
-#define HEX_BYTE_LENGTH    16
 #define DISASSEMBLED_BUFFER_SIZE 128
 #define SCREENCOLS_MIN     24
 #define SCREENROWS_MIN     5
@@ -19,10 +18,8 @@
 #define SEARCH_PATTERN_MAX 64
 
 #define EDITOR_VERSION     "0.0.2"
-#define HELLO_MESSAGE      "Help: Ctrl-q = Quit, m = Next Mode, F3 = Edit, F5 = Goto, F7 = Find"
 #define TEXT_MODE_STR      "Text Mode"
 #define HEX_MODE_STR       "Hex Mode"
-#define DISASSEMBLER_MODE_STR "Disassembler Mode"
 
 typedef enum editorMode {
     TEXT_MODE = 0,
@@ -68,11 +65,6 @@ typedef struct architectureSpec {
     int big_endian;
 } architectureSpec;
 
-typedef struct editorRow {
-    size_t size;
-    char  *chars;
-} editorRow;
-
 typedef struct disassemblerRow {
     size_t start_byte;
     size_t end_byte;
@@ -82,9 +74,7 @@ typedef struct disassemblerRow {
 typedef struct editorConfig {
     size_t            cx;
     size_t            cy;
-    size_t            rx;
     size_t            rowoff;
-    size_t            coloff;
     size_t            screenrows;
     size_t            screencols;
     size_t            terminal_rows;

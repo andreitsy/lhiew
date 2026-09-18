@@ -6,19 +6,17 @@ with text, hex and multiarchitecture disassembly views.
 
 [![license](https://img.shields.io/github/license/dec0dOS/amazing-github-template.svg?style=flat-square)](LICENSE)
 
-</div>
-
 <details open="open">
 <summary>Table of Contents</summary>
 
-- [About](##about)
+- [About](#about)
 - [Getting Started](#getting-started)
-    - [Usage](###usage)
-        - [Open file](####open_file)
-    - [Keybindings](###keybindings)
-- [Installing](##installing)
-  - [Requirments](#####requirments)
-  - [Compilling from source](#####compilling_from_source)
+    - [Usage](#usage)
+    - [Keybindings](#keybindings)
+- [Installing](#installing)
+  - [Requirements](#requirements)
+  - [Compiling from source](#compiling-from-source)
+- [Development and validation](docs/development.md)
 - [License](#license)
 - [Acknowledgements](#acknowledgements)
 
@@ -40,7 +38,7 @@ PE, NE, LE, LX and i386 NLM headers/regions and existing import names/ordinals.
 
 #### Open file
 
-You could open binary file to view
+Open an existing binary file:
 ```sh
 lhiew ./a.out
 ```
@@ -131,7 +129,7 @@ TMS320C64x, Motorola 6809 and MOS 6502.
 ![Automatically detected AArch64 disassembly](pics/multiarchitecture.png)
 
 Use **Shift-F1** or **`a`** to choose a CPU manually. Navigate with arrows,
-`j`/`k` or Page Up/Down; Enter applies and Escape cancels. **Auto (file header)**
+`j`/`k`, Page Up/Down or Home/End; Enter applies and Escape cancels. **Auto (file header)**
 restores automatic detection. Raw files default to x86-32 and need a manual
 choice for other CPUs; changing the architecture preserves the selected byte.
 
@@ -155,6 +153,8 @@ disassembly, rendering, cursor boundaries, and resizing. Sparse-file editing and
 backup checks exercise offsets beyond 4 GiB. When
 Python 3 is available, CTest also verifies the binary fixtures and drives the
 application through a pseudo-terminal to test live resizing and keyboard input.
+The same suite runs under strict warnings, aggressive Release optimization, and
+address/undefined-behavior sanitizers; see [development and validation](docs/development.md).
 
 The reproducible [binary fixtures](tests/fixtures/README.md) include 16-, 32-,
 and 64-bit x86 code, a minimal Linux ELF executable, and empty or malformed
@@ -178,6 +178,9 @@ For an automatically detected example, open
 | `F3`               | Enter hex editing from any view        |
 | `F5`               | Goto absolute hexadecimal file offset  |
 | `g`                | Goto offset while viewing              |
+| `F7`, view-mode `s` | Find hexadecimal bytes or literal text |
+| `Shift-F7`         | Repeat search in the recorded direction |
+| view-mode `n`, `N` | Repeat search forward/backward         |
 | `F8`, view-mode `b` | Open executable imports/header browser |
 | `Tab`              | Switch hex/ASCII input while editing   |
 | `F9`               | Save changed bytes; remain editing     |
@@ -199,6 +202,10 @@ Printable characters are input while editing. At the unsaved-edits prompt,
 `s` saves, `d` discards pending changes, and Escape returns to editing.
 Within the executable browser, Tab changes the table, F3 edits the selected
 import, Enter jumps to its bytes, and Escape returns to the underlying view.
+Within search, Tab switches hex/text input, Ctrl-U clears, Enter searches, and
+Escape cancels. Patterns contain at most 64 bytes. Searches start at the cursor
+and do not wrap; repeats move in the selected direction. Search also sees pending
+edits; use F7 during editing.
 
 Supported x86 decoding modes are:
 - 64 bit mode;
@@ -206,14 +213,15 @@ Supported x86 decoding modes are:
 - 16 bit protected mode;
 - real mode.
 
-#### Installing
+## Installing
 
-##### Requirments
-1. CMake 3.20 or higher
-2. A compiler that supports C17
+### Requirements
+1. CMake 3.21 or higher
+2. GCC or Clang with C17 support
 3. Git submodules initialized for Zydis and Capstone
+4. Python 3 (optional; enables fixture checks and terminal integration tests)
 
-##### Compilling from source
+### Compiling from source
 
 Please follow these steps for manual setup:
 
@@ -221,20 +229,25 @@ Please follow these steps for manual setup:
 git clone --recursive git@github.com:andreitsy/lhiew.git
 cd lhiew
 git submodule update --init --recursive
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```
 
+Release enables GCC `-Ofast`, or Clang's equivalent
+`-O3 -ffast-math -fstrict-aliasing`. Warnings are errors for LHiew and its C tests.
+For Debug, sanitizers, or standards-preserving Release optimization, see
+[the build options](docs/development.md#build-and-test).
+
 ## License
 
-This project is licensed under the **MIT license**. Feel free to edit and distribute this template as you like.
+This project is licensed under the **MIT license**.
 
 See [LICENSE](LICENSE) for more information.
 
 ## Acknowledgements
 
-Thanks for this awesome resources that were used during the development:
+Resources used during development:
 
 - https://viewsourcecode.org/snaptoken/kilo/
 - https://www.hiew.ru/

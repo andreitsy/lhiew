@@ -143,18 +143,8 @@ static void prompt_key(int key) {
         global_cfg.statusmsg[0] = '\0';
     } else if (key == '\r' || key == '\n') {
         apply_edit();
-    } else if (key == CTRL_KEY('u')) {
-        global_cfg.executable_input_length = 0;
-        global_cfg.executable_input[0] = '\0';
-        global_cfg.statusmsg[0] = '\0';
-    } else if (key == 127 || key == CTRL_KEY('h')) {
-        if (global_cfg.executable_input_length)
-            global_cfg.executable_input[--global_cfg.executable_input_length] = '\0';
-        global_cfg.statusmsg[0] = '\0';
-    } else if (key >= 32 && key < 127 &&
-               global_cfg.executable_input_length < sizeof(global_cfg.executable_input) - 1) {
-        global_cfg.executable_input[global_cfg.executable_input_length++] = (char)key;
-        global_cfg.executable_input[global_cfg.executable_input_length] = '\0';
+    } else if (editor_prompt_key(global_cfg.executable_input, &global_cfg.executable_input_length,
+                                 sizeof(global_cfg.executable_input), key) > 0) {
         global_cfg.statusmsg[0] = '\0';
     }
 }
@@ -164,9 +154,6 @@ void executable_browser_keypress(int key) {
         prompt_key(key);
         return;
     }
-    size_t count = visible_count();
-    size_t choice = global_cfg.executable_choice;
-    size_t page = global_cfg.screenrows > 1 ? global_cfg.screenrows - 1 : 1;
     switch (key) {
         case '\x1b':
         case F8_KEY:
@@ -196,16 +183,9 @@ void executable_browser_keypress(int key) {
             }
             return;
         }
-        case ARROW_UP: case 'k': if (choice) choice--; break;
-        case ARROW_DOWN: case 'j': if (choice + 1 < count) choice++; break;
-        case PAGE_UP: choice -= choice < page ? choice : page; break;
-        case PAGE_DOWN:
-            if (count) choice += count - choice - 1 < page ? count - choice - 1 : page;
-            break;
-        case HOME_KEY: case CTRL_HOME: choice = 0; break;
-        case END_KEY: case CTRL_END: choice = count ? count - 1 : 0; break;
     }
-    global_cfg.executable_choice = choice;
+    global_cfg.executable_choice = editor_menu_choice(global_cfg.executable_choice,
+                                                     visible_count(), key);
 }
 
 static void append_line(append_buffer *ab, const char *text, size_t width) {
@@ -219,30 +199,26 @@ static void append_line(append_buffer *ab, const char *text, size_t width) {
 }
 
 void executable_browser_draw(append_buffer *ab) {
+    if (global_cfg.executable_prompt) {
+        const executableRow *edit = selected();
+        char title[80];
+        if (global_cfg.executable_prompt == 1)
+            snprintf(title, sizeof(title), "Edit name: exactly %zu bytes", edit ? edit->name_length : 0);
+        else
+            snprintf(title, sizeof(title), "Edit ordinal (decimal)");
+        editor_draw_prompt(ab, title, global_cfg.executable_input, global_cfg.executable_input_length,
+                           "Ctrl-U clears | Enter stages");
+        return;
+    }
     size_t count = visible_count();
     size_t visible_rows = global_cfg.screenrows > 1 ? global_cfg.screenrows - 1 : 1;
     size_t first = global_cfg.executable_choice / visible_rows * visible_rows;
     size_t position = 0, index = 0;
-    const executableRow *edit = selected();
     for (size_t y = 0; y < global_cfg.screenrows; ++y) {
         append_to_buffer(ab, "\x1b[K", 3);
         char line[640] = "";
         int highlight = 0;
-        if (global_cfg.executable_prompt) {
-            if (!y) {
-                if (global_cfg.executable_prompt == 1)
-                    snprintf(line, sizeof(line), "Edit name: exactly %zu bytes", edit ? edit->name_length : 0);
-                else
-                    snprintf(line, sizeof(line), "Edit ordinal (decimal)");
-            } else if (y == 1) {
-                size_t room = global_cfg.screencols > 3 ? global_cfg.screencols - 3 : 0;
-                size_t length = global_cfg.executable_input_length;
-                size_t start = length > room ? length - room : 0;
-                snprintf(line, sizeof(line), "%c %s", start ? '<' : '>', global_cfg.executable_input + start);
-            } else if (y == 2) {
-                snprintf(line, sizeof(line), "Ctrl-U clears | Enter stages");
-            }
-        } else if (!y) {
+        if (!y) {
             snprintf(line, sizeof(line), "%s %s %zu/%zu%s", browser.format,
                      global_cfg.executable_imports ? "Imports" : "Headers/regions",
                      count ? global_cfg.executable_choice + 1 : 0, count,

@@ -4,11 +4,18 @@
 #include <string.h>
 
 /* https://learn.microsoft.com/en-us/windows/win32/debug/pe-format */
+typedef struct peSection {
+    uint32_t rva, length;
+    size_t offset;
+} peSection;
+
 typedef struct peView {
     const uint8_t *data;
     size_t size, sections, section_count, headers;
     unsigned width;
     int bound;
+    peSection *regions;
+    size_t region_count;
 } peView;
 
 enum { PE_NAME = 1, PE_ORDINAL = 2 };
@@ -95,26 +102,25 @@ static void pe_guard_edits(peGuards *guards, executableInfo *info) {
 /* A metadata item must occupy one unambiguous, file-backed RVA interval. */
 static int pe_rva(const peView *pe, uint32_t rva, size_t length,
                   size_t *offset, size_t *end) {
-    int found = 0;
-    if (rva < pe->headers && exe_span(pe->headers, rva, length)) {
+    if (rva < pe->headers) {
+        if (!byte_span(pe->headers, rva, length)) return 0;
         *offset = rva;
         *end = pe->headers;
-        found = 1;
+        return 1;
     }
-    for (size_t i = 0; i < pe->section_count; ++i) {
-        const uint8_t *section = pe->data + pe->sections + i * 40;
-        uint32_t va = exe_u32(section + 12), raw = exe_u32(section + 20);
-        uint32_t span = exe_u32(section + 16), virtual_size = exe_u32(section + 8);
-        if (virtual_size && virtual_size < span) span = virtual_size;
-        if (rva >= va && (uint64_t)rva - va < span &&
-            length <= span - ((uint64_t)rva - va)) {
-            if (found) return 0;
-            *offset = (size_t)raw + (rva - va);
-            *end = (size_t)raw + span;
-            found = 1;
-        }
+    size_t low = 0, high = pe->region_count;
+    while (low < high) {
+        size_t mid = low + (high - low) / 2;
+        if (pe->regions[mid].rva <= rva) low = mid + 1;
+        else high = mid;
     }
-    return found && exe_span(pe->size, *offset, length);
+    if (!low) return 0;
+    const peSection *region = &pe->regions[low - 1];
+    size_t delta = rva - region->rva;
+    if (delta >= region->length || length > region->length - delta) return 0;
+    *offset = region->offset + delta;
+    *end = region->offset + region->length;
+    return 1;
 }
 
 static int pe_string(const peView *pe, uint32_t rva, unsigned skip,
@@ -133,19 +139,19 @@ static int pe_import_rows(const peView *pe, uint32_t rva, uint32_t length,
         return exe_error(info, EXE_MALFORMED, "Invalid PE import directory span");
     if (!pe_guard(guards, info, directory, length, PE_NAME | PE_ORDINAL)) return 0;
     end = directory + length;
-    for (size_t descriptor = directory; exe_span(end, descriptor, 20); descriptor += 20) {
+    for (size_t descriptor = directory; byte_span(end, descriptor, 20); descriptor += 20) {
         const uint8_t *record = pe->data + descriptor;
-        uint32_t lookup = exe_u32(record), stamp = exe_u32(record + 4);
-        uint32_t name_rva = exe_u32(record + 12), iat = exe_u32(record + 16);
-        if (!lookup && !stamp && !exe_u32(record + 8) && !name_rva && !iat)
+        uint32_t lookup = read_le32(record), stamp = read_le32(record + 4);
+        uint32_t name_rva = read_le32(record + 12), iat = read_le32(record + 16);
+        if (!lookup && !stamp && !read_le32(record + 8) && !name_rva && !iat)
             return 1;
-        char module[256], label[576];
+        char module[256];
         size_t name_offset, name_length;
         if (!pe_string(pe, name_rva, 0, module, &name_offset, &name_length) || !iat)
             return exe_error(info, EXE_MALFORMED, "Invalid PE imported module");
         int editable = !pe->bound && !stamp;
-        snprintf(label, sizeof(label), "Module %s%s", module, editable ? "" : " [bound/read-only]");
-        executableRow *row = exe_add(info, EXE_MODULE, descriptor, 20, label);
+        executableRow *row = exe_add(info, EXE_MODULE, descriptor, 20,
+                                     "Module %s%s", module, editable ? "" : " [bound/read-only]");
         if (!row) return 0;
         row->name_offset = name_offset;
         row->name_length = name_length;
@@ -158,9 +164,9 @@ static int pe_import_rows(const peView *pe, uint32_t rva, uint32_t length,
             if (!pe_rva(pe, iat, pe->width, &bound_iat, &bound_end))
                 return exe_error(info, EXE_MALFORMED, "Invalid bound PE import address table");
             int terminated = 0;
-            for (size_t field = bound_iat; exe_span(bound_end, field, pe->width); field += pe->width) {
+            for (size_t field = bound_iat; byte_span(bound_end, field, pe->width); field += pe->width) {
                 if (!pe_guard(guards, info, field, pe->width, PE_NAME | PE_ORDINAL)) return 0;
-                uint64_t value = pe->width == 8 ? exe_u64(pe->data + field) : exe_u32(pe->data + field);
+                uint64_t value = pe->width == 8 ? read_le64(pe->data + field) : read_le32(pe->data + field);
                 if (!value) { terminated = 1; break; }
             }
             if (!terminated)
@@ -180,8 +186,8 @@ static int pe_import_rows(const peView *pe, uint32_t rva, uint32_t length,
             size_t mirror = iat_offset + index * pe->width;
             if (!pe_guard(guards, info, field, pe->width, PE_NAME) ||
                 !pe_guard(guards, info, mirror, pe->width, PE_NAME)) return 0;
-            uint64_t value = pe->width == 8 ? exe_u64(pe->data + field) : exe_u32(pe->data + field);
-            uint64_t actual = pe->width == 8 ? exe_u64(pe->data + mirror) : exe_u32(pe->data + mirror);
+            uint64_t value = pe->width == 8 ? read_le64(pe->data + field) : read_le32(pe->data + field);
+            uint64_t actual = pe->width == 8 ? read_le64(pe->data + mirror) : read_le32(pe->data + mirror);
             if (!value) {
                 if (!actual) terminated = 1;
                 break;
@@ -201,8 +207,8 @@ static int pe_import_rows(const peView *pe, uint32_t rva, uint32_t length,
             if (value & flag) {
                 if (value & ~(flag | UINT64_C(0xffff)))
                     return exe_error(info, EXE_MALFORMED, "Reserved bits in PE import ordinal");
-                snprintf(label, sizeof(label), "%s!#%u", module, (unsigned)(value & 0xffff));
-                row = exe_add(info, EXE_IMPORT, field, pe->width, label);
+                row = exe_add(info, EXE_IMPORT, field, pe->width,
+                              "%s!#%u", module, (unsigned)(value & 0xffff));
                 if (!row) return 0;
                 row->ordinal_offset = field;
                 row->ordinal_width = pe->width;
@@ -215,8 +221,7 @@ static int pe_import_rows(const peView *pe, uint32_t rva, uint32_t length,
                 if (value > 0x7fffffff ||
                     !pe_string(pe, (uint32_t)value, 2, function, &name_offset, &name_length))
                     return exe_error(info, EXE_MALFORMED, "Invalid PE imported function name");
-                snprintf(label, sizeof(label), "%s!%s", module, function);
-                row = exe_add(info, EXE_IMPORT, field, pe->width, label);
+                row = exe_add(info, EXE_IMPORT, field, pe->width, "%s!%s", module, function);
                 if (!row) return 0;
                 row->name_offset = name_offset;
                 row->name_length = name_length;
@@ -255,89 +260,109 @@ static int pe_imports(const peView *pe, uint32_t rva, uint32_t length,
     return ok;
 }
 
+static int pe_section_compare(const void *a, const void *b) {
+    const peSection *left = a, *right = b;
+    return left->rva < right->rva ? -1 : left->rva > right->rva;
+}
+
+/* Validate once, retaining disjoint RVA mappings for logarithmic lookup.
+   Browser rows remain in file table order, independent of the sorted index. */
+static int pe_sections(peView *pe, executableInfo *info) {
+    if (!pe->section_count) return 1;
+    pe->regions = malloc(pe->section_count * sizeof(*pe->regions));
+    if (!pe->regions)
+        return exe_error(info, EXE_LIMIT, "Not enough memory for PE section mappings");
+    for (size_t i = 0; i < pe->section_count; ++i) {
+        const uint8_t *section = pe->data + pe->sections + i * 40;
+        size_t offset = read_le32(section + 20), length = read_le32(section + 16);
+        if (!byte_span(pe->size, offset, length))
+            return exe_error(info, EXE_MALFORMED, "PE section extends past file");
+        uint32_t va = read_le32(section + 12), mapped = read_le32(section + 16);
+        uint32_t virtual_size = read_le32(section + 8);
+        if (virtual_size && virtual_size < mapped) mapped = virtual_size;
+        if ((uint64_t)va + mapped > UINT64_C(0x100000000) ||
+            (mapped && va < pe->headers))
+            return exe_error(info, EXE_MALFORMED, "Ambiguous PE header/section RVA mapping");
+        if (mapped) pe->regions[pe->region_count++] = (peSection){va, mapped, offset};
+        char name[9];
+        memcpy(name, section, 8); name[8] = '\0';
+        if (!exe_add(info, EXE_REGION, length ? offset : pe->sections + i * 40,
+                     length ? length : 40, "Section %s RVA=%08x size=%zx flags=%08x",
+                     name, read_le32(section + 12), length, read_le32(section + 36))) return 0;
+    }
+    qsort(pe->regions, pe->region_count, sizeof(*pe->regions), pe_section_compare);
+    for (size_t i = 1; i < pe->region_count; ++i) {
+        const peSection *previous = &pe->regions[i - 1], *current = &pe->regions[i];
+        if ((uint64_t)previous->rva + previous->length > current->rva)
+            return exe_error(info, EXE_MALFORMED, "Overlapping PE section RVA mappings");
+    }
+    return 1;
+}
+
+static int pe_directories(peView *pe, size_t optional, size_t fixed,
+                           uint32_t directories, executableInfo *info) {
+    if (directories > 11) {
+        const uint8_t *bound = pe->data + optional + fixed + 11 * 8;
+        pe->bound = read_le32(bound) || read_le32(bound + 4);
+        if (pe->bound) {
+            size_t offset, end;
+            if (!read_le32(bound) || read_le32(bound + 4) < 8 ||
+                !pe_rva(pe, read_le32(bound), read_le32(bound + 4), &offset, &end))
+                return exe_error(info, EXE_MALFORMED, "Invalid PE bound import directory");
+            if (!exe_add(info, EXE_HEADER, offset, read_le32(bound + 4), "Bound import directory (raw)")) return 0;
+        }
+    }
+    if (directories > 13) {
+        const uint8_t *delay = pe->data + optional + fixed + 13 * 8;
+        if (read_le32(delay) || read_le32(delay + 4)) {
+            snprintf(info->message, sizeof(info->message), "Standard imports shown; delay imports are not decoded");
+            size_t offset, end;
+            if (read_le32(delay) && read_le32(delay + 4) &&
+                pe_rva(pe, read_le32(delay), read_le32(delay + 4), &offset, &end)) {
+                if (!exe_add(info, EXE_HEADER, offset, read_le32(delay + 4), "Delay import directory (raw)")) return 0;
+            } else {
+                return exe_error(info, EXE_MALFORMED, "Invalid PE delay import directory");
+            }
+        }
+    }
+    if (pe->bound)
+        snprintf(info->message, sizeof(info->message), "Bound imports are browse-only");
+    if (directories < 2) return 1;
+    const uint8_t *imports = pe->data + optional + fixed + 8;
+    return pe_imports(pe, read_le32(imports), read_le32(imports + 4), info);
+}
+
 int exe_parse_pe(const uint8_t *data, size_t size, size_t header, executableInfo *info) {
     snprintf(info->format, sizeof(info->format), "PE");
-    if (!exe_span(size, header, 24))
+    if (!byte_span(size, header, 24))
         return exe_error(info, EXE_MALFORMED, "Truncated PE header");
-    size_t optional = header + 24, optional_size = exe_u16(data + header + 20);
-    if (!exe_span(size, optional, optional_size) || optional_size < 2)
+    size_t optional = header + 24, optional_size = read_le16(data + header + 20);
+    if (!byte_span(size, optional, optional_size) || optional_size < 2)
         return exe_error(info, EXE_MALFORMED, "Truncated PE optional header");
-    uint16_t magic = exe_u16(data + optional);
+    uint16_t magic = read_le16(data + optional);
     if (magic != 0x10b && magic != 0x20b)
         return exe_error(info, EXE_UNSUPPORTED, "Unsupported PE optional header");
     int wide = magic == 0x20b;
     size_t fixed = wide ? 112 : 96;
     if (optional_size < fixed)
         return exe_error(info, EXE_MALFORMED, "Truncated PE data directories");
-    uint32_t directories = exe_u32(data + optional + fixed - 4);
+    uint32_t directories = read_le32(data + optional + fixed - 4);
     if (directories > (optional_size - fixed) / 8)
         return exe_error(info, EXE_MALFORMED, "PE directory count exceeds optional header");
     peView pe = {data, size, optional + optional_size,
-                 exe_u16(data + header + 6), exe_u32(data + optional + 60),
-                 wide ? 8u : 4u, 0};
-    if (!exe_span(size, pe.sections, pe.section_count * 40) || pe.headers > size)
+                 read_le16(data + header + 6), read_le32(data + optional + 60),
+                 wide ? 8u : 4u, 0, NULL, 0};
+    if (!byte_span(size, pe.sections, pe.section_count * 40) || pe.headers > size)
         return exe_error(info, EXE_MALFORMED, "Invalid PE section/header span");
     if (pe.section_count > 4096)
         return exe_error(info, EXE_LIMIT, "PE section count exceeds browser limit (4096)");
     snprintf(info->format, sizeof(info->format), "%s", wide ? "PE32+" : "PE32");
-    char label[576];
-    snprintf(label, sizeof(label), "%s machine=%04x sections=%zu entry RVA=%08x",
-             info->format, exe_u16(data + header + 4), pe.section_count,
-             exe_u32(data + optional + 16));
-    if (!exe_add(info, EXE_HEADER, header, 24 + optional_size, label)) return 0;
-    for (size_t i = 0; i < pe.section_count; ++i) {
-        const uint8_t *section = data + pe.sections + i * 40;
-        size_t offset = exe_u32(section + 20), length = exe_u32(section + 16);
-        if (!exe_span(size, offset, length))
-            return exe_error(info, EXE_MALFORMED, "PE section extends past file");
-        uint64_t va = exe_u32(section + 12), mapped = length;
-        uint32_t virtual_size = exe_u32(section + 8);
-        if (virtual_size && virtual_size < mapped) mapped = virtual_size;
-        if (va + mapped > UINT64_C(0x100000000) ||
-            (mapped && va < pe.headers))
-            return exe_error(info, EXE_MALFORMED, "Ambiguous PE header/section RVA mapping");
-        for (size_t j = 0; mapped && j < i; ++j) {
-            const uint8_t *other = data + pe.sections + j * 40;
-            uint64_t other_va = exe_u32(other + 12), other_size = exe_u32(other + 16);
-            uint32_t other_virtual = exe_u32(other + 8);
-            if (other_virtual && other_virtual < other_size) other_size = other_virtual;
-            if (other_size && va < other_va + other_size && other_va < va + mapped)
-                return exe_error(info, EXE_MALFORMED, "Overlapping PE section RVA mappings");
-        }
-        char name[9];
-        memcpy(name, section, 8); name[8] = '\0';
-        snprintf(label, sizeof(label), "Section %s RVA=%08x size=%zx flags=%08x",
-                 name, exe_u32(section + 12), length, exe_u32(section + 36));
-        if (!exe_add(info, EXE_REGION, length ? offset : pe.sections + i * 40,
-                     length ? length : 40, label)) return 0;
-    }
-    if (directories > 11) {
-        const uint8_t *bound = data + optional + fixed + 11 * 8;
-        pe.bound = exe_u32(bound) || exe_u32(bound + 4);
-        if (pe.bound) {
-            size_t offset, end;
-            if (!exe_u32(bound) || exe_u32(bound + 4) < 8 ||
-                !pe_rva(&pe, exe_u32(bound), exe_u32(bound + 4), &offset, &end))
-                return exe_error(info, EXE_MALFORMED, "Invalid PE bound import directory");
-            if (!exe_add(info, EXE_HEADER, offset, exe_u32(bound + 4), "Bound import directory (raw)")) return 0;
-        }
-    }
-    if (directories > 13) {
-        const uint8_t *delay = data + optional + fixed + 13 * 8;
-        if (exe_u32(delay) || exe_u32(delay + 4)) {
-            snprintf(info->message, sizeof(info->message), "Standard imports shown; delay imports are not decoded");
-            size_t offset, end;
-            if (exe_u32(delay) && exe_u32(delay + 4) &&
-                pe_rva(&pe, exe_u32(delay), exe_u32(delay + 4), &offset, &end)) {
-                if (!exe_add(info, EXE_HEADER, offset, exe_u32(delay + 4), "Delay import directory (raw)")) return 0;
-            } else {
-                return exe_error(info, EXE_MALFORMED, "Invalid PE delay import directory");
-            }
-        }
-    }
-    if (pe.bound)
-        snprintf(info->message, sizeof(info->message), "Bound imports are browse-only");
-    if (directories < 2) return 1;
-    const uint8_t *imports = data + optional + fixed + 8;
-    return pe_imports(&pe, exe_u32(imports), exe_u32(imports + 4), info);
+    if (!exe_add(info, EXE_HEADER, header, 24 + optional_size,
+                 "%s machine=%04x sections=%zu entry RVA=%08x",
+                 info->format, read_le16(data + header + 4), pe.section_count,
+                 read_le32(data + optional + 16))) return 0;
+    int ok = pe_sections(&pe, info) &&
+             pe_directories(&pe, optional, fixed, directories, info);
+    free(pe.regions);
+    return ok;
 }

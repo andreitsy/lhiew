@@ -1,10 +1,13 @@
 #include "test_harness.h"
 #include "lhiew/append_buffer.h"
 
+#include <stdint.h>
+
 static void test_init(void) {
     append_buffer ab = ABUF_INIT;
     ASSERT_EQ(ab.buffer, NULL);
     ASSERT_EQ(ab.len, (size_t)0);
+    ASSERT_EQ(ab.capacity, (size_t)0);
 }
 
 static void test_append_single(void) {
@@ -26,8 +29,15 @@ static void test_append_multiple(void) {
 
 static void test_append_empty(void) {
     append_buffer ab = ABUF_INIT;
-    append_to_buffer(&ab, "", 0);
+    append_to_buffer(&ab, NULL, 0);
     ASSERT_EQ(ab.len, (size_t)0);
+    ASSERT_EQ(ab.buffer, NULL);
+    append_to_buffer(&ab, "saved", 5);
+    char *buffer = ab.buffer;
+    append_to_buffer(&ab, NULL, 0);
+    ASSERT_EQ(ab.buffer, buffer);
+    ASSERT_EQ(ab.len, (size_t)5);
+    ASSERT_EQ(memcmp(ab.buffer, "saved", 5), 0);
     free_append_buffer(&ab);
 }
 
@@ -47,6 +57,12 @@ static void test_free_resets(void) {
     free_append_buffer(&ab);
     ASSERT_EQ(ab.buffer, NULL);
     ASSERT_EQ(ab.len, (size_t)0);
+    ASSERT_EQ(ab.capacity, (size_t)0);
+    free_append_buffer(&ab);
+    append_to_buffer(&ab, "reuse", 5);
+    ASSERT_EQ(ab.len, (size_t)5);
+    ASSERT_EQ(memcmp(ab.buffer, "reuse", 5), 0);
+    free_append_buffer(&ab);
 }
 
 static void test_append_large(void) {
@@ -55,6 +71,22 @@ static void test_append_large(void) {
         append_to_buffer(&ab, "x", 1);
     }
     ASSERT_EQ(ab.len, (size_t)1000);
+    for (size_t i = 0; i < ab.len; ++i)
+        ASSERT_EQ(ab.buffer[i], 'x');
+    ASSERT(ab.capacity >= ab.len);
+    free_append_buffer(&ab);
+}
+
+static void test_append_overflow_preserves_contents(void) {
+    append_buffer ab = ABUF_INIT;
+    append_to_buffer(&ab, "kept", 4);
+    char *buffer = ab.buffer;
+    size_t capacity = ab.capacity;
+    append_to_buffer(&ab, "x", SIZE_MAX);
+    ASSERT_EQ(ab.buffer, buffer);
+    ASSERT_EQ(ab.len, (size_t)4);
+    ASSERT_EQ(ab.capacity, capacity);
+    ASSERT_EQ(memcmp(ab.buffer, "kept", 4), 0);
     free_append_buffer(&ab);
 }
 
@@ -67,5 +99,6 @@ int main(void) {
     RUN_TEST(test_append_binary);
     RUN_TEST(test_free_resets);
     RUN_TEST(test_append_large);
+    RUN_TEST(test_append_overflow_preserves_contents);
     TEST_REPORT();
 }

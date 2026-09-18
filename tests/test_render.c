@@ -11,11 +11,17 @@
 
 static const char *TMP_FILE = "/tmp/lhiew_test_render.bin";
 
-static void setup_file_data(const void *data, size_t len) {
+static void teardown(void);
+
+static int setup_file_data(const void *data, size_t len) {
     /* Write temp file and mmap it via the global */
     FILE *f = fopen(TMP_FILE, "wb");
-    fwrite(data, 1, len, f);
-    fclose(f);
+    if (!f)
+        return 0;
+    size_t written = fwrite(data, 1, len, f);
+    int closed = fclose(f);
+    if (written != len || closed != 0)
+        return 0;
 
     RESET_GLOBAL_CFG();
     global_cfg.fp = fopen(TMP_FILE, "rb");
@@ -23,13 +29,21 @@ static void setup_file_data(const void *data, size_t len) {
     global_cfg.cur_screencols = 80;
     global_cfg.screencols = 80;
 
-    int fd = fileno(global_cfg.fp);
     struct stat st;
-    fstat(fd, &st);
-    global_cfg.num_bytes = st.st_size;
-    global_cfg.file = mmap(NULL, global_cfg.num_bytes, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (!global_cfg.fp || !global_cfg.filename ||
+        fstat(fileno(global_cfg.fp), &st) != 0 || st.st_size < 0)
+        goto failed;
+    global_cfg.num_bytes = (size_t)st.st_size;
+    global_cfg.file = mmap(NULL, global_cfg.num_bytes, PROT_READ, MAP_PRIVATE,
+                           fileno(global_cfg.fp), 0);
+    if (global_cfg.file == MAP_FAILED)
+        goto failed;
     global_cfg.numrows = global_cfg.num_bytes / global_cfg.cur_screencols + 1;
     global_cfg.screenrows = 24;
+    return 1;
+failed:
+    teardown();
+    return 0;
 }
 
 static void teardown(void) {
@@ -105,41 +119,9 @@ static int frame_fits(const append_buffer *ab, size_t rows, size_t cols) {
     return 1;
 }
 
-static void test_get_byte_position_origin(void) {
-    RESET_GLOBAL_CFG();
-    global_cfg.cx = 0;
-    global_cfg.cy = 0;
-    global_cfg.cur_screencols = 80;
-    global_cfg.num_bytes = 1000;
-
-    ASSERT_EQ(get_byte_position(), (size_t)0);
-}
-
-static void test_get_byte_position_mid(void) {
-    RESET_GLOBAL_CFG();
-    global_cfg.cx = 10;
-    global_cfg.cy = 5;
-    global_cfg.cur_screencols = 80;
-    global_cfg.num_bytes = 1000;
-
-    /* 10 + 80*5 = 410 */
-    ASSERT_EQ(get_byte_position(), (size_t)410);
-}
-
-static void test_get_byte_position_clamp(void) {
-    RESET_GLOBAL_CFG();
-    global_cfg.cx = 50;
-    global_cfg.cy = 100;
-    global_cfg.cur_screencols = 80;
-    global_cfg.num_bytes = 100;
-
-    /* 50 + 80*100 = 8050 > 100 → clamp to 100 */
-    ASSERT_EQ(get_byte_position(), (size_t)100);
-}
-
 static void test_draw_row_text_printable(void) {
     const char data[] = "ABCDEFGHIJ";
-    setup_file_data(data, 10);
+    ASSERT(setup_file_data(data, 10));
     global_cfg.cur_screencols = 10;
     global_cfg.numrows = 1;
     global_cfg.cy = 0;
@@ -157,7 +139,7 @@ static void test_draw_row_text_printable(void) {
 static void test_draw_row_text_control_chars(void) {
     /* Control chars (0x01-0x1a) should render as '.' */
     const uint8_t data[] = {0x01, 0x02, 0x0A, 0x41};
-    setup_file_data(data, 4);
+    ASSERT(setup_file_data(data, 4));
     global_cfg.cur_screencols = 4;
     global_cfg.numrows = 1;
     global_cfg.cy = 0;
@@ -178,7 +160,7 @@ static void test_draw_row_text_control_chars(void) {
 static void test_draw_row_text_high_bytes(void) {
     /* Non-printable, non-control bytes should render as '?' */
     const uint8_t data[] = {0x80, 0xFF};
-    setup_file_data(data, 2);
+    ASSERT(setup_file_data(data, 2));
     global_cfg.cur_screencols = 2;
     global_cfg.numrows = 1;
     global_cfg.cy = 0;
@@ -200,7 +182,6 @@ static void test_editor_scroll_down(void) {
     global_cfg.cur_screencols = 80;
     global_cfg.numrows = 100;
     global_cfg.rowoff = 0;
-    global_cfg.coloff = 0;
     global_cfg.cy = 30;
     global_cfg.cx = 5;
 
@@ -216,7 +197,6 @@ static void test_editor_scroll_up(void) {
     global_cfg.cur_screencols = 80;
     global_cfg.numrows = 100;
     global_cfg.rowoff = 20;
-    global_cfg.coloff = 0;
     global_cfg.cy = 10;
     global_cfg.cx = 0;
 
@@ -235,7 +215,7 @@ static void test_set_status_message(void) {
 
 static void test_text_rows_use_displayed_row_length(void) {
     const char data[] = "ABCDEFGHIJKLM";
-    setup_file_data(data, sizeof(data) - 1);
+    ASSERT(setup_file_data(data, sizeof(data) - 1));
     global_cfg.cur_screencols = 5;
     global_cfg.cy = 2;
     append_buffer ab = ABUF_INIT;
@@ -258,7 +238,7 @@ static void test_text_rows_use_displayed_row_length(void) {
 
 static void test_hex_partial_and_missing_rows(void) {
     const char data[] = "ABCDEFGHIJKLMNOPQR";
-    setup_file_data(data, sizeof(data) - 1);
+    ASSERT(setup_file_data(data, sizeof(data) - 1));
     global_cfg.mode = HEX_MODE;
     global_cfg.cur_byte = 17;
     editor_resize(5, 80);
@@ -290,7 +270,7 @@ static void test_hex_partial_and_missing_rows(void) {
 
 static void test_disassembler_compact_and_wide_rows(void) {
     const uint8_t data[] = {0x90};
-    setup_file_data(data, sizeof(data));
+    ASSERT(setup_file_data(data, sizeof(data)));
     global_cfg.mode = DISASSEMBLER_MODE;
     const size_t widths[] = {24, 40, 80, 120};
     for (size_t i = 0; i < sizeof(widths) / sizeof(widths[0]); ++i) {
@@ -322,7 +302,7 @@ static void test_disassembler_compact_and_wide_rows(void) {
 static void test_frames_fit_supported_sizes_in_all_modes(void) {
     uint8_t data[257];
     memset(data, 0x90, sizeof(data));
-    setup_file_data(data, sizeof(data));
+    ASSERT(setup_file_data(data, sizeof(data)));
     const size_t widths[] = {24, 25, 31, 40, 63, 65, 66, 76, 77, 79, 80, 81, 120};
     const size_t heights[] = {5, 6, 8, 24};
     for (int mode = TEXT_MODE; mode <= DISASSEMBLER_MODE; ++mode) {
@@ -349,7 +329,7 @@ static void test_frames_fit_supported_sizes_in_all_modes(void) {
 
 static void test_tiny_window_message_and_recovery(void) {
     const char data[] = "ABC";
-    setup_file_data(data, sizeof(data) - 1);
+    ASSERT(setup_file_data(data, sizeof(data) - 1));
     const size_t sizes[][2] = {{1, 1}, {1, 24}, {2, 40}, {4, 80}, {8, 12}, {5, 23}};
     for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); ++i) {
         editor_resize(sizes[i][0], sizes[i][1]);
@@ -380,7 +360,7 @@ static void test_tiny_window_message_and_recovery(void) {
 
 static void test_empty_and_eof_frames_fit(void) {
     const char data[] = "ABCDEFGHIJKLMNOPQRSTUVWX";
-    setup_file_data(data, sizeof(data) - 1);
+    ASSERT(setup_file_data(data, sizeof(data) - 1));
     global_cfg.cur_byte = global_cfg.num_bytes;
     for (int mode = TEXT_MODE; mode <= DISASSEMBLER_MODE; ++mode) {
         global_cfg.mode = (editorMode)mode;
@@ -406,7 +386,7 @@ static void test_empty_and_eof_frames_fit(void) {
 
 static void test_status_and_messages_sanitize_control_bytes(void) {
     const char data[] = "ABC";
-    setup_file_data(data, sizeof(data) - 1);
+    ASSERT(setup_file_data(data, sizeof(data) - 1));
     free(global_cfg.filename);
     global_cfg.filename = strdup("/tmp/bad\x1b[2J\nname");
     editor_resize(5, 40);
@@ -424,7 +404,7 @@ static void test_status_and_messages_sanitize_control_bytes(void) {
 
 static void test_edit_cursor_and_prompts_fit_after_resize(void) {
     const char data[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    setup_file_data(data, sizeof(data) - 1);
+    ASSERT(setup_file_data(data, sizeof(data) - 1));
     global_cfg.mode = HEX_MODE;
     ASSERT(hex_edit_begin());
     const size_t widths[] = {24, 31, 40, 80, 120};
@@ -467,11 +447,38 @@ static void test_edit_cursor_and_prompts_fit_after_resize(void) {
     teardown();
 }
 
+static void test_long_prompts_scroll_and_sanitize_input(void) {
+    RESET_GLOBAL_CFG();
+    editor_resize(5, 24);
+    global_cfg.search_prompt = 1;
+    global_cfg.search_input_length = sizeof(global_cfg.search_input) - 1;
+    memset(global_cfg.search_input, 'a', global_cfg.search_input_length);
+    global_cfg.search_input[global_cfg.search_input_length] = '\0';
+    append_buffer ab = ABUF_INIT;
+    editor_draw_screen(&ab);
+    ASSERT(frame_fits(&ab, 5, 24));
+    char *plain = plain_output(&ab);
+    ASSERT(strstr(plain, "< aaaaaaaaaaaaaaaaaaaaa") != NULL);
+    free(plain);
+    free_append_buffer(&ab);
+
+    global_cfg.search_prompt = 0;
+    global_cfg.executable_browser = 1;
+    global_cfg.executable_prompt = 1;
+    global_cfg.executable_input_length = sizeof(global_cfg.executable_input) - 1;
+    memset(global_cfg.executable_input, 'b', global_cfg.executable_input_length);
+    memcpy(global_cfg.executable_input + global_cfg.executable_input_length - 3, "\x1b\n\xff", 4);
+    editor_draw_screen(&ab);
+    ASSERT(frame_fits(&ab, 5, 24));
+    plain = plain_output(&ab);
+    ASSERT(strstr(plain, "< bbbbbbbbbbbbbbbbbb@.?") != NULL);
+    free(plain);
+    free_append_buffer(&ab);
+    free(global_cfg.disassembler_buffer);
+}
+
 int main(void) {
     printf("test_render:\n");
-    RUN_TEST(test_get_byte_position_origin);
-    RUN_TEST(test_get_byte_position_mid);
-    RUN_TEST(test_get_byte_position_clamp);
     RUN_TEST(test_draw_row_text_printable);
     RUN_TEST(test_draw_row_text_control_chars);
     RUN_TEST(test_draw_row_text_high_bytes);
@@ -486,5 +493,6 @@ int main(void) {
     RUN_TEST(test_empty_and_eof_frames_fit);
     RUN_TEST(test_status_and_messages_sanitize_control_bytes);
     RUN_TEST(test_edit_cursor_and_prompts_fit_after_resize);
+    RUN_TEST(test_long_prompts_scroll_and_sanitize_input);
     TEST_REPORT();
 }

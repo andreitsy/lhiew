@@ -7,15 +7,10 @@
 
 #include <string.h>
 
-static int hex_value(int key) {
-    if (key >= '0' && key <= '9') return key - '0';
-    if (key >= 'a' && key <= 'f') return key - 'a' + 10;
-    if (key >= 'A' && key <= 'F') return key - 'A' + 10;
-    return -1;
-}
-
 int search_compile(const char *text, size_t text_length, int ascii,
                    uint8_t *pattern, size_t *length) {
+    if (!length)
+        return 0;
     *length = 0;
     if (!text || !pattern)
         return 0;
@@ -27,6 +22,7 @@ int search_compile(const char *text, size_t text_length, int ascii,
         return 1;
     }
     int high = -1;
+    size_t count = 0;
     for (size_t i = 0; i < text_length; ++i) {
         unsigned char c = (unsigned char)text[i];
         if (c == ' ' || c == '\t') {
@@ -35,20 +31,23 @@ int search_compile(const char *text, size_t text_length, int ascii,
                 return 0;
             continue;
         }
-        int digit = hex_value(c);
+        int digit = editor_hex_digit(c);
         if (digit < 0)
             return 0;
         if (high < 0) {
             high = digit;
             continue;
         }
-        if (*length == SEARCH_PATTERN_MAX)
+        if (count == SEARCH_PATTERN_MAX)
             return 0;
-        pattern[(*length)++] = (uint8_t)(high << 4 | digit);
+        pattern[count++] = (uint8_t)(high << 4 | digit);
         high = -1;
     }
     /* A trailing single digit is an incomplete byte, not a one-nibble pattern. */
-    return high < 0;
+    if (high >= 0)
+        return 0;
+    *length = count;
+    return 1;
 }
 
 int search_find(const uint8_t *data, size_t size, const uint8_t *pattern,
@@ -115,6 +114,7 @@ static int run_search(size_t from, int backward) {
 }
 
 int search_repeat(int backward) {
+    global_cfg.search_backward = backward != 0;
     if (!global_cfg.search_pattern_length) {
         editor_set_status_message("No previous search; F7 enters a pattern");
         return 0;
@@ -140,18 +140,6 @@ int search_repeat(int backward) {
 void search_keypress(int key) {
     if (key == '\x1b') {
         global_cfg.search_prompt = 0;
-        global_cfg.statusmsg[0] = '\0';
-        return;
-    }
-    if (key == 127 || key == CTRL_KEY('h')) {
-        if (global_cfg.search_input_length)
-            global_cfg.search_input[--global_cfg.search_input_length] = '\0';
-        global_cfg.statusmsg[0] = '\0';
-        return;
-    }
-    if (key == CTRL_KEY('u')) {
-        global_cfg.search_input_length = 0;
-        global_cfg.search_input[0] = '\0';
         global_cfg.statusmsg[0] = '\0';
         return;
     }
@@ -182,41 +170,23 @@ void search_keypress(int key) {
         run_search(global_cfg.cur_byte, global_cfg.search_backward);
         return;
     }
-    if (key < 32 || key >= 127)
-        return;
     size_t room = global_cfg.search_ascii ? SEARCH_PATTERN_MAX
         : sizeof(global_cfg.search_input) - 1;
-    if (global_cfg.search_input_length >= room) {
+    int edited = editor_prompt_key(global_cfg.search_input, &global_cfg.search_input_length,
+                                   room + 1, key);
+    if (edited < 0)
         editor_set_status_message("Pattern is limited to %d bytes", SEARCH_PATTERN_MAX);
-        return;
-    }
-    global_cfg.search_input[global_cfg.search_input_length++] = (char)key;
-    global_cfg.search_input[global_cfg.search_input_length] = '\0';
-    global_cfg.statusmsg[0] = '\0';
+    else if (edited)
+        global_cfg.statusmsg[0] = '\0';
 }
 
 void search_draw_prompt(append_buffer *ab) {
-    for (size_t y = 0; y < global_cfg.screenrows; ++y) {
-        char line[160] = "";
-        if (!y) {
-            snprintf(line, sizeof(line), "Search %s (%s)",
-                     global_cfg.search_ascii ? "text" : "hex bytes",
-                     global_cfg.search_backward ? "backward" : "forward");
-        } else if (y == 1) {
-            size_t room = global_cfg.screencols > 3 ? global_cfg.screencols - 3 : 0;
-            size_t length = global_cfg.search_input_length;
-            size_t start = length > room ? length - room : 0;
-            snprintf(line, sizeof(line), "%c %s", start ? '<' : '>',
-                     global_cfg.search_input + start);
-        } else if (y == 2) {
-            snprintf(line, sizeof(line), "Tab hex/text | Ctrl-U clears");
-        }
-        append_to_buffer(ab, "\x1b[K", 3);
-        size_t width = global_cfg.screencols;
-        size_t len = strlen(line);
-        append_to_buffer(ab, line, len < width ? len : width);
-        append_to_buffer(ab, "\r\n", 2);
-    }
+    char title[64];
+    snprintf(title, sizeof(title), "Search %s (%s)",
+             global_cfg.search_ascii ? "text" : "hex bytes",
+             global_cfg.search_backward ? "backward" : "forward");
+    editor_draw_prompt(ab, title, global_cfg.search_input, global_cfg.search_input_length,
+                       "Tab hex/text | Ctrl-U clears");
 }
 
 const char *search_prompt_message(void) {

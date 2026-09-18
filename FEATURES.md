@@ -66,7 +66,7 @@ Flip to the code view, follow the control flow, find the import, patch it out.
 | Inspect the imports table | `F8` | ✅ Module and import rows with names and ordinals |
 | Find a specific import by name | — | ⚠️ The list can be read and searched in the file, but names are not resolved onto call operands |
 | NOP an instruction | `Alt-F2` | ⚠️ `F3` then typing `90` over the bytes; no instruction-aware NOP |
-| Assemble a replacement instruction | — | ❌ No assembler; Zydis's encoder is linked but never called |
+| Assemble a replacement instruction | — | ❌ No assembler; the unused Zydis encoder is disabled at build time |
 
 **Largely reachable.** This is the scenario LHiew can follow today: the format is
 recognized, the imports table opens, and the bytes can be patched and saved. The
@@ -191,7 +191,8 @@ they do not imply support for every processor or extension within a family.
 The [profile table](docs/architectures.md#implemented-profiles) gives the scope.
 
 While viewing, `Shift-F1` or `a` opens an architecture menu in every view. Arrows or `j`/`k` move
-the selection; Page Up/Down scroll by a menu page; Enter applies; Escape cancels.
+the selection; Page Up/Down scroll by a menu page; Home/End select the first/last
+profile; Enter applies; Escape cancels.
 Auto uses supported file headers. Manual selection preserves the selected file
 byte and invalidates cached disassembly. `o` cycles x86 modes; other families use
 the architecture menu.
@@ -209,8 +210,8 @@ continue. Backward decoding remains heuristic without a known boundary within
 the lookback. ARM/Thumb interworking and mapping symbols are not tracked;
 mixed-mode locations require manual selection.
 
-**Assembly-text editing remains missing.** Zydis's encoder is present in the
-dependency but unused by the application. Hex editing can patch instruction
+**Assembly-text editing remains missing.** The unused Zydis encoder is disabled
+in the application build. Hex editing can patch instruction
 bytes, but there is no instruction-input line, assembler, or general undo history.
 Selecting an architecture changes decoding only. x86 output remains AT&T rather
 than Intel.
@@ -342,7 +343,7 @@ goto, instruction-pattern search and replace remain missing.
 | `F5` | Goto offset: absolute, relative, virtual address, hex/decimal input | ⚠️ F5 or view-mode `g` accepts absolute hex file offsets; no relative/VA/decimal expression input |
 | `F7` | Search bytes, strings, or assembled instructions | ⚠️ F7 or view-mode `s` searches hex-pair or literal text patterns up to 64 bytes; no wildcards, instruction patterns, block scope or replace |
 | `Ctrl-Enter` / `Shift-F7` | Repeat last search | ✅ Shift-F7 repeats in the recorded direction; view-mode `n`/`N` force forward/backward |
-| `Alt-F7` | Toggle search direction | ⚠️ direction is chosen per repeat by `n`/`N` and shown in the prompt; no persistent toggle or status indicator |
+| `Alt-F7` | Toggle search direction | ⚠️ `n`/`N` record the direction for subsequent repeats; the prompt shows it, but no `Alt-F7` toggle exists |
 | `Alt-F8` | Translation table / string encoding | ❌ |
 | `Alt-F6` | Strings dialog with length/encoding/offset/filter controls | ❌ |
 | `F6` / `Ctrl-F6` | Find code references to current location | ❌ |
@@ -430,7 +431,7 @@ they are not additional completed features or a shortcut count.
 | MZ overlays/header maintenance | ❌ No overlay navigation or header repair; current MZ support detects mode and maps the load module/entry |
 | Instruction patterns: `?`, `;`, `;;` | ❌ No decoded-instruction pattern matcher; this needs separate design from byte/string search |
 | Byte/instruction scan steps | ⚠️ Byte search exists; there is no cross-reference engine and no selectable byte/instruction scan policy |
-| Block-scoped search | ❌ Search always covers the whole file; no marked ranges exist to scope it to |
+| Block-scoped search | ❌ Search scans the open file from the cursor in the selected direction; no marked-range scope or wrapping |
 | Independent search continuation | ⚠️ The pattern and direction persist, but repeats resume from the cursor, so moving away loses the search position |
 | Offset-based block I/O | ❌ No range import/export with a source/destination offset |
 | Block transcoding | ❌ No encoding conversion during range import/export |
@@ -505,6 +506,13 @@ scope. Treat it as the next structural piece rather than a later convenience.
 
 ## Regression evidence and limits
 
+The refactoring consolidates bounded binary readers, NLM validation, prompt/menu
+handling, file-state checks and buffer growth. It preserves the feature scope
+described above. First-party C builds use strict warnings as errors; CI exercises GCC and
+Clang Debug/Release configurations, including ASan/UBSan. GCC Release uses
+`-Ofast`; see [build policy and validation](docs/development.md).
+
+
 - [`tests/test_binary.c`](tests/test_binary.c) checks parser bounds, malformed and
   unsupported headers, executable mappings, entries, and container details.
 - [`tests/test_architectures.c`](tests/test_architectures.c) loads deterministic
@@ -519,14 +527,16 @@ scope. Treat it as the next structural piece rather than a later convenience.
   key sequences, Shift-F1 variants, menu apply/cancel/pages, entry jumps, common
   non-x86 detection, unsupported status, and resize.
 - [`tests/test_file_buffer.c`](tests/test_file_buffer.c) checks ordinary file
-  opening, read-only mapping, and empty files.
+  opening, mapped contents, empty files, failure-preserving reloads, and reopening
+  an owned pathname.
 - [`tests/test_hex_edit.c`](tests/test_hex_edit.c) and
   [`tests/test_hex_editor.py`](tests/test_hex_editor.py) check explicit
   save/discard, conflicts and failures, reachable editing controls, and sparse-file
   overwrites beyond 4 GiB; see [editing verification](docs/hex-editing.md#verification).
 - [`tests/test_search.c`](tests/test_search.c) checks pattern compilation
   (hex pairs, separators, incomplete nibbles, the length limit, literal text) and
-  forward/backward scanning at file boundaries and on impossible spans.
+  forward/backward scanning at file boundaries and on impossible spans, including
+  overlapping matches and direction retention after unsuccessful repeats.
   [`tests/test_search_ui.py`](tests/test_search_ui.py) drives `F7`, `Tab`,
   repeat, cancel, rejected input and searching inside an edit session through a
   real terminal.

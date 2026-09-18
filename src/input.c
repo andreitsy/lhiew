@@ -10,7 +10,55 @@
 #include "lhiew/terminal.h"
 
 #include <stdlib.h>
-#include <unistd.h>
+
+int editor_hex_digit(int key) {
+    if (key >= '0' && key <= '9') return key - '0';
+    if (key >= 'a' && key <= 'f') return key - 'a' + 10;
+    if (key >= 'A' && key <= 'F') return key - 'A' + 10;
+    return -1;
+}
+
+int editor_prompt_key(char *text, size_t *length, size_t capacity, int key) {
+    if (!text || !length || !capacity)
+        return 0;
+    if (key == CTRL_KEY('u')) {
+        *length = 0;
+    } else if (key == 127 || key == CTRL_KEY('h')) {
+        if (*length) --*length;
+    } else if (key >= 32 && key < 127) {
+        if (*length >= capacity - 1)
+            return -1;
+        text[(*length)++] = (char)key;
+    } else {
+        return 0;
+    }
+    text[*length] = '\0';
+    return 1;
+}
+
+size_t editor_menu_choice(size_t choice, size_t count, int key) {
+    if (!count)
+        return 0;
+    if (choice >= count)
+        choice = count - 1;
+    size_t page = global_cfg.screenrows > 1 ? global_cfg.screenrows - 1 : 1;
+    switch (key) {
+        case ARROW_UP: case 'k':
+            return choice ? choice - 1 : 0;
+        case ARROW_DOWN: case 'j':
+            return choice + (choice < count - 1);
+        case PAGE_UP:
+            return choice - (choice < page ? choice : page);
+        case PAGE_DOWN:
+            return choice + (count - choice - 1 < page ? count - choice - 1 : page);
+        case HOME_KEY: case CTRL_HOME:
+            return 0;
+        case END_KEY: case CTRL_END:
+            return count - 1;
+        default:
+            return choice;
+    }
+}
 
 static size_t disassembler_cursor_row(size_t position) {
     if (global_cfg.disassembler_buffer) {
@@ -89,12 +137,13 @@ void editor_move_cursor(int key) {
     size_t position = global_cfg.cur_byte;
     size_t width = global_cfg.cur_screencols;
     global_cfg.edit_nibble = 0;
-    if (key == CTRL_HOME || key == CTRL_END) {
-        global_cfg.cur_byte = key == CTRL_HOME ? 0 : global_cfg.num_bytes - 1;
-        switch_mode();
-        return;
-    }
-    if (global_cfg.mode == DISASSEMBLER_MODE) {
+    if (key == ARROW_LEFT || key == 'h') {
+        if (position) position--;
+    } else if (key == ARROW_RIGHT || key == 'l') {
+        if (position < global_cfg.num_bytes) position++;
+    } else if (key == CTRL_HOME || key == CTRL_END) {
+        position = key == CTRL_HOME ? 0 : global_cfg.num_bytes - 1;
+    } else if (global_cfg.mode == DISASSEMBLER_MODE) {
         if (key == PAGE_UP || key == PAGE_DOWN) {
             global_cfg.cur_byte = disassembler_page_position(position, key);
             switch_mode();
@@ -112,14 +161,6 @@ void editor_move_cursor(int key) {
             case END_KEY:
                 if (row < global_cfg.screenrows)
                     position = global_cfg.disassembler_buffer[row].end_byte - 1;
-                break;
-            case ARROW_LEFT:
-            case 'h':
-                if (position) position--;
-                break;
-            case ARROW_RIGHT:
-            case 'l':
-                if (position < global_cfg.num_bytes) position++;
                 break;
             case ARROW_UP:
             case 'k':
@@ -152,14 +193,6 @@ void editor_move_cursor(int key) {
                     position += distance < remaining ? distance : remaining - 1;
                 break;
             }
-            case ARROW_LEFT:
-            case 'h':
-                if (position) position--;
-                break;
-            case ARROW_RIGHT:
-            case 'l':
-                if (position < global_cfg.num_bytes) position++;
-                break;
             case ARROW_UP:
             case 'k':
                 if (position >= width) position -= width;
@@ -195,44 +228,22 @@ static void change_mode(editorMode mode) {
 }
 
 static void architecture_menu_keypress(int key) {
-    size_t count = architecture_profile_count();
-    if (!count)
-        return;
-    size_t choice = global_cfg.architecture_choice;
-    if (choice >= count)
-        choice = count - 1;
-    size_t page = global_cfg.screenrows > 1 ? global_cfg.screenrows - 1 : 1;
+    global_cfg.architecture_choice = editor_menu_choice(global_cfg.architecture_choice,
+                                                       architecture_profile_count(), key);
     switch (key) {
         case '\x1b':
             global_cfg.architecture_menu = 0;
             return;
         case '\r':
         case '\n':
-            architecture_select(choice);
+            architecture_select(global_cfg.architecture_choice);
             global_cfg.architecture_menu = 0;
             return;
-        case ARROW_UP:
-        case 'k':
-            if (choice)
-                choice--;
-            break;
-        case ARROW_DOWN:
-        case 'j':
-            if (choice + 1 < count)
-                choice++;
-            break;
-        case PAGE_UP:
-            choice -= choice < page ? choice : page;
-            break;
-        case PAGE_DOWN:
-            choice += count - choice - 1 < page ? count - choice - 1 : page;
-            break;
     }
-    global_cfg.architecture_choice = choice;
 }
 
 static void quit_editor(void) {
-    write(STDOUT_FILENO, "\x1b[2J\x1b[H", 7);
+    (void)terminal_write("\x1b[2J\x1b[H", 7);
     exit(0);
 }
 
@@ -268,13 +279,6 @@ static void edit_exit_keypress(int key) {
     hex_edit_cancel();
 }
 
-static int hex_digit(int key) {
-    if (key >= '0' && key <= '9') return key - '0';
-    if (key >= 'a' && key <= 'f') return key - 'a' + 10;
-    if (key >= 'A' && key <= 'F') return key - 'A' + 10;
-    return -1;
-}
-
 static void open_goto_prompt(void) {
     global_cfg.goto_prompt = 1;
     global_cfg.goto_length = 0;
@@ -286,17 +290,13 @@ static void open_goto_prompt(void) {
 static void goto_keypress(int key) {
     if (key == '\x1b') {
         global_cfg.goto_prompt = 0;
-    } else if (key == 127 || key == CTRL_KEY('h')) {
-        if (global_cfg.goto_length)
-            global_cfg.goto_input[--global_cfg.goto_length] = '\0';
-        global_cfg.statusmsg[0] = '\0';
     } else if (key == '\r' || key == '\n') {
         const char *input = global_cfg.goto_input;
         size_t start = input[0] == '0' && (input[1] == 'x' || input[1] == 'X') ? 2 : 0;
         size_t offset = 0;
         int valid = global_cfg.goto_length > start;
         for (size_t i = start; valid && i < global_cfg.goto_length; ++i) {
-            int digit = hex_digit((unsigned char)input[i]);
+            int digit = editor_hex_digit((unsigned char)input[i]);
             if (digit < 0 || offset > (SIZE_MAX - (size_t)digit) / 16)
                 valid = 0;
             else
@@ -310,14 +310,13 @@ static void goto_keypress(int key) {
         global_cfg.statusmsg[0] = '\0';
         global_cfg.cur_byte = offset;
         switch_mode();
-    } else if (hex_digit(key) >= 0 || key == 'x' || key == 'X') {
-        if (global_cfg.goto_length < sizeof(global_cfg.goto_input) - 1) {
-            global_cfg.goto_input[global_cfg.goto_length++] = (char)key;
-            global_cfg.goto_input[global_cfg.goto_length] = '\0';
-            global_cfg.statusmsg[0] = '\0';
-        } else {
+    } else if (editor_hex_digit(key) >= 0 || key == 'x' || key == 'X' ||
+               key == 127 || key == CTRL_KEY('h') || key == CTRL_KEY('u')) {
+        if (editor_prompt_key(global_cfg.goto_input, &global_cfg.goto_length,
+                              sizeof(global_cfg.goto_input), key) < 0)
             editor_set_status_message("Offset too long; Backspace to correct");
-        }
+        else
+            global_cfg.statusmsg[0] = '\0';
     }
 }
 
@@ -365,7 +364,7 @@ static void edit_keypress(int key) {
             editor_move_cursor(key);
             return;
     }
-    int digit = hex_digit(key);
+    int digit = editor_hex_digit(key);
     if ((global_cfg.edit_ascii && (key < 32 || key >= 127)) ||
         (!global_cfg.edit_ascii && digit < 0))
         return;

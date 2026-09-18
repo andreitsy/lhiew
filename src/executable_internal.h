@@ -1,25 +1,13 @@
 #pragma once
 
 #include "lhiew/executable.h"
+#include "byte_reader.h"
 
-static inline int exe_span(size_t size, size_t offset, size_t length) {
-    return offset <= size && length <= size - offset;
-}
-
-static inline uint16_t exe_u16(const uint8_t *p) {
-    return (uint16_t)p[0] | (uint16_t)p[1] << 8;
-}
-
-static inline uint32_t exe_u32(const uint8_t *p) {
-    return (uint32_t)exe_u16(p) | (uint32_t)exe_u16(p + 2) << 16;
-}
-
-static inline uint64_t exe_u64(const uint8_t *p) {
-    return (uint64_t)exe_u32(p) | (uint64_t)exe_u32(p + 4) << 32;
-}
-
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((format(printf, 5, 6)))
+#endif
 executableRow *exe_add(executableInfo *info, executableRowKind kind,
-                       size_t offset, size_t length, const char *label);
+                       size_t offset, size_t length, const char *format, ...);
 int exe_error(executableInfo *info, executableStatus status, const char *message);
 /* Copies a bounded name (max 255 bytes), returning its character span. */
 int exe_name(const uint8_t *data, size_t size, size_t offset, size_t end,

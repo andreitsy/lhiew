@@ -3,15 +3,42 @@
 #include "lhiew/editor.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
 
-void die_safely(const char *s) {
-    write(STDOUT_FILENO, "\x1b[2J", 4);
-    write(STDOUT_FILENO, "\x1b[H", 3);
+#ifndef TERMINAL_WRITE
+#define TERMINAL_WRITE write
+#else
+ssize_t TERMINAL_WRITE(int fd, const void *buffer, size_t length);
+#endif
+
+int terminal_write(const char *data, size_t length) {
+    while (length) {
+        size_t count = length > (size_t)SSIZE_MAX ? (size_t)SSIZE_MAX : length;
+        ssize_t written = TERMINAL_WRITE(STDOUT_FILENO, data, count);
+        if (written < 0) {
+            if (errno == EINTR) continue;
+            return 0;
+        }
+        if (!written) {
+            errno = EIO;
+            return 0;
+        }
+        data += (size_t)written;
+        length -= (size_t)written;
+    }
+    return 1;
+}
+
+_Noreturn void die_safely(const char *s) {
+    int error = errno;
+    /* Clearing a failing terminal is best effort; report the original error. */
+    (void)terminal_write("\x1b[2J\x1b[H", 7);
+    errno = error;
     perror(s);
     exit(EXIT_FAILURE);
 }
@@ -20,7 +47,7 @@ void disable_raw_mode(void) {
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &global_cfg.orig_termios) == -1)
         die_safely("tcsetattr");
     /* Compact/too-small views also hide the cursor. Always restore it. */
-    write(STDOUT_FILENO, "\x1b[m\x1b[?25h", 9);
+    (void)terminal_write("\x1b[m\x1b[?25h", 9);
     if (global_cfg.fp != NULL)
         fclose(global_cfg.fp);
 }
@@ -30,10 +57,10 @@ void enable_raw_mode(void) {
         die_safely("tcgetattr");
     atexit(disable_raw_mode);
     struct termios raw = global_cfg.orig_termios;
-    raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
-    raw.c_oflag &= ~(OPOST);
-    raw.c_cflag |= (CS8);
-    raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
+    raw.c_iflag &= ~(tcflag_t)(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
+    raw.c_oflag &= ~(tcflag_t)OPOST;
+    raw.c_cflag |= CS8;
+    raw.c_lflag &= ~(tcflag_t)(ECHO | ICANON | IEXTEN | ISIG);
     raw.c_cc[VMIN] = 0;
     raw.c_cc[VTIME] = 1;
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1)
@@ -125,7 +152,7 @@ int get_window_size(size_t *rows, size_t *cols) {
     struct winsize ws;
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 &&
         ioctl(STDIN_FILENO, TIOCGWINSZ, &ws) == -1) {
-        if (write(STDOUT_FILENO, "\x1b[999C\x1b[999B\x1b[6n", 16) != 16)
+        if (!terminal_write("\x1b[999C\x1b[999B\x1b[6n", 16))
             return -1;
         return get_cursor_position(rows, cols);
     }
