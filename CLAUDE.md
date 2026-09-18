@@ -17,23 +17,25 @@ Clone recursively to initialize the pinned `deps/zydis` and `deps/capstone` subm
 
 ```sh
 git submodule update --init --recursive   # if not cloned with --recursive
-mkdir -p build && cd build
-cmake ..
-make
-./lhiew ../<some-binary>
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build --parallel
+./build/lhiew /path/to/binary
 ```
 
 Run the test suite with CTest:
 
 ```sh
-cd build
-ctest --output-on-failure       # all tests
-ctest -R append_buffer          # single module
+ctest --test-dir build --output-on-failure
+ctest --test-dir build -R '^append_buffer$' --output-on-failure
 ```
 
 `cmake-build-debug/` is a CLion-generated build tree; prefer a fresh `build/` directory for command-line work.
 
-Compiler flags: `-Wall -Wextra -Wpedantic` via `target_compile_options`. New warnings should be treated as real. There is no lint target or formatter config.
+`lhiew_options` shares strict first-party warnings, including conversions,
+prototypes, format strings, shadowing and `-Werror`. Release uses GCC `-Ofast`
+or Clang's documented equivalent. `LHIEW_SANITIZERS=ON` enables ASan/UBSan.
+See [development.md](docs/development.md) for the full build matrix and options.
+Keep these policies out of vendored targets. There is no formatter configuration.
 
 ## Architecture
 
@@ -50,30 +52,35 @@ docs/            Architecture analysis and implementation design
 
 ### Build targets
 
+- `lhiew_options` — shared warnings, Release optimization and optional sanitizer flags.
 - `lhiew_core` — static library containing all modules except `main.c`. Public include path: `include/`.
 - `lhiew` — executable, links `lhiew_core`.
 - `test_<module>` — one test executable per module, each links `lhiew_core`.
 
 ### Global state
 
-The editor is built around a single global `editorConfig global_cfg` (declared in `include/lhiew/types.h`, defined in `src/types.c`). Every module reads and writes this struct directly — there is no handle passed around — so when adding state, add a field to `editorConfig` and initialize it in `init_editor()` (`src/editor.c`).
+The editor uses a single `editorConfig global_cfg` (declared in `include/lhiew/types.h`,
+defined in `src/types.c`). UI modules access it directly; the binary parsers and
+pure search routines receive explicit inputs. `init_editor()` uses a designated
+initializer for nonzero defaults and preserves the saved terminal settings;
+other fields start at zero. Initialize new state there.
 
 ### Module responsibilities
 
-- **types** (`types.h`, `types.c`) — all type definitions (`editorConfig`, `editorMode`, `disassemblerMode`, `disassemblerRow`, `editorRow`), constants, and the `global_cfg` definition.
-- **append_buffer** (`append_buffer.h`, `append_buffer.c`) — growable byte buffer used to assemble a full screen frame before a single `write()`.
+- **types** (`types.h`, `types.c`) — all type definitions (`editorConfig`, `editorMode`, `disassemblerMode`, `disassemblerRow`), constants, and the `global_cfg` definition.
+- **append_buffer** (`append_buffer.h`, `append_buffer.c`) — byte buffer with geometric capacity growth and checked size arithmetic. Initialize with `ABUF_INIT`; freeing resets it for reuse. Used to assemble a screen frame before terminal output.
 - **terminal** (`terminal.h`, `terminal.c`) — termios raw-mode setup/teardown, escape-sequence key decoder (arrows, PgUp/PgDn, Del), window-size detection, `die_safely`.
 - **file_buffer** (`file_buffer.h`, `file_buffer.c`) — regular-file open, checked file-size conversion and read-only private `mmap` into `global_cfg.file`. Reload replaces the mapping without copying the whole file.
 - **hex_edit** (`hex_edit.h`, `hex_edit.c`) — writable reopen with file identity checks, mandatory backup before edit enable, private copy-on-write editing and a sparse sorted list of changed bytes. `hex_edit_patch` validates and reserves an entire group of field changes before staging any bytes. Saves verify file identity/version and expected original bytes, then use `pwrite` and `fsync`; failed saves retain pending records. Discard remaps the originally opened file. See `docs/hex-editing.md` for limits and failure semantics.
 - **file_backup** (`file_backup.h`, `file_backup.c`) — creates `<filename>.backup` with bounded-memory, sparse-aware copying and exclusive publication. Preserves an existing independent regular backup; source changes or backup failures prevent editing. Flushes the copy and parent directory before editing begins.
 - **executable** (`executable.h`, `executable.c`, `executable_{pe,ne,linear,nlm}.c`) — bounded PE32/PE32+, NE, LE/LX and i386 NLM v4 metadata parsers, independent of editor state. Rows expose raw file spans and validated editable name/ordinal fields; errors disable all structured edits. Initialize `executableInfo` to zero and release its rows with `executable_free`.
 - **executable_browser** (`executable_browser.h`, `executable_browser.c`) — F8/`b` header/import browser, raw-byte navigation and exact-length name/width-preserving ordinal prompts. Uses the existing hex edit transaction/save/discard path; paired PE lookup/IAT changes stage together. See `docs/executable-imports.md` for format limits.
-- **editor** (`editor.h`, `editor.c`) — `init_editor` lifecycle, `switch_mode` (recomputes `cx`/`cy`/`numrows` from `cur_byte`), `get_row_len`.
+- **editor** (`editor.h`, `editor.c`) — initialization, resizing and `switch_mode`, which recomputes `cx`/`cy`/`numrows` from `cur_byte` with overflow-safe row arithmetic.
 - **input** (`input.h`, `input.c`) — `editor_process_keypress` dispatches keys: mode switching (`m` / `Ctrl-M`), disassembler operand-size cycling (`o`), cursor movement via `editor_move_cursor`, quit (`Ctrl-Q`).
 - **render** (`render.h`, `render.c`) — per-mode row drawing (`draw_row_text`, `draw_row_hex`, `draw_row_disassembler`), status/message bars, scrolling, `editor_refresh_screen`.
 - **binary** (`binary.h`, `binary.c`) — bounded ELF, PE/TE, DOS MZ, thin Mach-O and i386 NLM v4 parsing. Distinguishes raw, detected, unsupported and malformed files; supplies entry/first-code offsets and file-region-to-runtime-address mappings without heap allocation. NLM uses file offsets because its load base is not encoded.
-- **search** (`search.h`, `search.c`) — byte and text pattern search over the mapping. `search_compile` turns prompt text into at most `SEARCH_PATTERN_MAX` bytes, rejecting incomplete hexadecimal pairs; `search_find` is a pure forward/backward scan. Both are side-effect free and unit tested. The prompt, repeat and status handling live in the same module and move `cur_byte` through `switch_mode()`.
-- **architecture** (`architecture.h`, `architecture.c`) — named decoder profiles, automatic detection on file read, manual overrides, profile labels, instruction alignment and entry navigation. Static detection metadata is valid only for the currently detected file; `binary_detected` and file identity gate access.
+- **search** (`search.h`, `search.c`) — byte and text pattern search over the mapping. `search_compile` turns prompt text into at most `SEARCH_PATTERN_MAX` bytes, rejecting incomplete hexadecimal pairs; `search_find` scans forward/backward without changing editor state. Forward scanning uses `memchr` to locate candidate first bytes. The prompt, repeat and status handling live in the same module and move `cur_byte` through `switch_mode()`.
+- **architecture** (`architecture.h`, `architecture.c`) — named decoder profiles, automatic detection on file read, manual overrides, profile labels, instruction alignment and entry navigation. Static detection metadata is valid only for the currently detected mapping; `binary_detected`, its pointer and size gate access.
 - **disassembler** (`disassembler.h`, `disassembler.c`) — wraps Zydis/Capstone. `disassemble_block(cur_byte)` fills `global_cfg.disassembler_buffer` with up to `screenrows` rows, centering the instruction containing `cur_byte`. A single forward decoding pass retains preceding rows in a ring, preserving Thumb IT state. Bounded lookback respects cached boundaries, known entry points, instruction alignment and mapped region ends.
 
 ### Runtime loop (`src/main.c`)
@@ -89,7 +96,7 @@ The editor is built around a single global `editorConfig global_cfg` (declared i
 
 `editor_resize()` records the physical `terminal_rows` and `screencols`, reserves two rows for status/help, resizes the disassembly buffer, and reflows the cursor. Below `SCREENCOLS_MIN` columns or `SCREENROWS_MIN` total rows (24x5), `window_too_small` pauses navigation and displays a resize message. Input timeouts poll the terminal dimensions, so resizing redraws without a keypress; enlarging restores the selected byte.
 
-The canonical cursor state is `global_cfg.cur_byte` (an absolute byte offset into the mmap). `cx`/`cy` are derived from it via `cur_screencols`. When adding a movement or mode feature, update `cur_byte` and let `switch_mode()` / `get_byte_position()` re-derive the rest; do not maintain `cx`/`cy` independently.
+The canonical cursor state is `global_cfg.cur_byte` (an absolute byte offset into the mmap). `cx`/`cy` are derived from it via `cur_screencols`. When adding a movement or mode feature, update `cur_byte` and let `switch_mode()` re-derive the rest; do not maintain `cx`/`cy` independently.
 
 `disassemblerMode` (`REAL`, `MODE_LONG_COMPAT_16/32/64`) controls x86 decoding;
 `architecture` and `big_endian` select the wider CPU profile. `init_editor()`
@@ -150,8 +157,9 @@ F7 (or `s` while viewing) opens `search_prompt`. Tab switches between hexadecima
 pairs and literal text, Ctrl-U clears, and Enter compiles the pattern into
 `search_pattern`/`search_pattern_length` and searches from the cursor. Shift-F7
 repeats in the recorded direction; `n`/`N` repeat forward/backward while viewing
-and set that direction. Repeats start one byte past the cursor so a match already
-under it is not returned again. Search works during an edit session, where it
+and set that direction. Repeats start one byte away from the cursor in the chosen
+direction so the current match is not returned again. Searches do not wrap.
+Search works during an edit session, where it
 reads the private mapping and therefore matches pending changes; `F7` is used
 there because letters are data. A scan is a single uninterruptible pass, so add a
 progress/abort path before relaxing the pattern length or adding wildcards.
@@ -164,8 +172,19 @@ All drawing goes through `append_buffer`: code appends strings (including ANSI e
 
 `lhiew/types.h` defines `_GNU_SOURCE` and other feature-test macros. It must be included **before** any standard library headers to ensure POSIX functions like `fileno` and `strdup` are declared. In source and test files, put `#include "lhiew/types.h"` first.
 
+### Shared internals
+
+`src/byte_reader.h` provides unaligned endian reads and subtraction-based span
+checks; callers validate spans before reading. `src/nlm_internal.h` shares NLM
+header validation between detection and browsing. `src/file_state.h` distinguishes
+inode identity, file extent and version checks for backup/save operations.
+Reuse these helpers; keep format-specific validation in each parser. Goto,
+search and import prompts share printable ASCII input, Backspace/Ctrl-H and
+Ctrl-U handling in `input`, plus common drawing in `render`. Architecture and
+browser menus share bounded arrow, j/k, paging and Home/End navigation.
+
 ## Dependencies
 
-- **Zydis** (submodule at `deps/zydis`) — added via `add_subdirectory` with `ZYDIS_BUILD_TOOLS` and `ZYDIS_BUILD_EXAMPLES` turned off, linked as `PUBLIC Zydis` through `lhiew_core`.
+- **Zydis** (submodule at `deps/zydis`) — added via `add_subdirectory` with `ZYDIS_BUILD_TOOLS` and `ZYDIS_BUILD_EXAMPLES` turned off and its unused encoder disabled, linked as `PUBLIC Zydis` through `lhiew_core`.
 - **Capstone 5.0.9** (submodule at `deps/capstone`) — static native non-x86 backends; x86/EVM/WASM, tools, install targets, and upstream tests disabled. Full instruction strings enabled. Headers treated as third-party system includes.
-- Requires CMake >= 3.20 and a C17 compiler. Linux-only: depends on `termios.h`, `sys/ioctl.h` (`TIOCGWINSZ`), and `sys/mman.h` (`mmap`).
+- Requires CMake >= 3.21 and GCC or Clang with C17 support. Linux is the target platform; the application depends on `termios.h`, `sys/ioctl.h` (`TIOCGWINSZ`), and `sys/mman.h` (`mmap`).

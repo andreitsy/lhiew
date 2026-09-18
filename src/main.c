@@ -1,9 +1,9 @@
+#include "lhiew/types.h"
 #include "lhiew/editor.h"
 #include "lhiew/file_buffer.h"
 #include "lhiew/input.h"
 #include "lhiew/render.h"
 #include "lhiew/terminal.h"
-#include "lhiew/types.h"
 
 int main(int argc, char *argv[]) {
     enable_raw_mode();
@@ -12,7 +12,6 @@ int main(int argc, char *argv[]) {
         open_file_to_view(argv[1]);
         switch_mode();
     }
-    editor_set_status_message(HELLO_MESSAGE);
     while (1) {
         editor_refresh_screen();
         editor_process_keypress();

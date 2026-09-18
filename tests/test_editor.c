@@ -2,30 +2,6 @@
 #include "test_harness.h"
 #include "lhiew/editor.h"
 
-static void test_get_row_len_empty(void) {
-    RESET_GLOBAL_CFG();
-    /* num_bytes == 0 → returns 0 */
-    ASSERT_EQ(get_row_len(), (size_t)0);
-}
-
-static void test_get_row_len_full_row(void) {
-    RESET_GLOBAL_CFG();
-    global_cfg.num_bytes = 160;
-    global_cfg.cur_screencols = 80;
-    global_cfg.cy = 0;
-    /* row 0: 160 - 0*80 = 160; min(160, 80) = 80 */
-    ASSERT_EQ(get_row_len(), (size_t)80);
-}
-
-static void test_get_row_len_partial_row(void) {
-    RESET_GLOBAL_CFG();
-    global_cfg.num_bytes = 100;
-    global_cfg.cur_screencols = 80;
-    global_cfg.cy = 1;
-    /* row 1: 100 - 1*80 = 20; min(20, 80) = 20 */
-    ASSERT_EQ(get_row_len(), (size_t)20);
-}
-
 static void test_switch_mode_text(void) {
     RESET_GLOBAL_CFG();
     global_cfg.screencols = 80;
@@ -52,7 +28,8 @@ static void test_switch_mode_hex(void) {
 
     switch_mode();
 
-    ASSERT_EQ(global_cfg.cur_screencols, (size_t)HEX_BYTE_LENGTH);
+    /* An 80-column terminal fits sixteen hex bytes, offsets and ASCII. */
+    ASSERT_EQ(global_cfg.cur_screencols, (size_t)16);
     ASSERT_EQ(global_cfg.cy, (size_t)2);   /* 33/16 = 2 */
     ASSERT_EQ(global_cfg.cx, (size_t)1);   /* 33%16 = 1 */
     ASSERT_EQ(global_cfg.numrows, (size_t)17); /* 256/16+1 = 17 */
@@ -158,21 +135,38 @@ static void test_hex_width_fits_terminal(void) {
     free(global_cfg.disassembler_buffer);
 }
 
-static void test_get_row_len_past_eof(void) {
+static void test_switch_mode_clamps_cursor_and_scroll_without_overflow(void) {
     RESET_GLOBAL_CFG();
     global_cfg.num_bytes = 100;
-    global_cfg.cur_screencols = 24;
-    global_cfg.cy = 5;
-    ASSERT_EQ(get_row_len(), (size_t)0);
-    global_cfg.cur_screencols = 0;
-    ASSERT_EQ(get_row_len(), (size_t)0);
+    global_cfg.cur_byte = SIZE_MAX;
+    global_cfg.rowoff = SIZE_MAX;
+    global_cfg.cur_screencols = 80;
+    global_cfg.screencols = 24;
+    switch_mode();
+    ASSERT_EQ(global_cfg.cur_byte, (size_t)100);
+    ASSERT_EQ(global_cfg.cy, (size_t)4);
+    ASSERT_EQ(global_cfg.cx, (size_t)4);
+    ASSERT_EQ(global_cfg.rowoff, (size_t)4);
+
+    global_cfg.num_bytes = SIZE_MAX;
+    global_cfg.cur_byte = SIZE_MAX;
+    global_cfg.screencols = 0;
+    switch_mode();
+    ASSERT_EQ(global_cfg.cur_screencols, (size_t)1);
+    ASSERT_EQ(global_cfg.numrows, SIZE_MAX);
+    ASSERT_EQ(global_cfg.cy, SIZE_MAX);
+    ASSERT_EQ(global_cfg.cx, (size_t)0);
+
+    global_cfg.num_bytes = 0;
+    switch_mode();
+    ASSERT_EQ(global_cfg.cur_byte, (size_t)0);
+    ASSERT_EQ(global_cfg.numrows, (size_t)0);
+    ASSERT_EQ(global_cfg.cy, (size_t)0);
+    ASSERT_EQ(global_cfg.cx, (size_t)0);
 }
 
 int main(void) {
     printf("test_editor:\n");
-    RUN_TEST(test_get_row_len_empty);
-    RUN_TEST(test_get_row_len_full_row);
-    RUN_TEST(test_get_row_len_partial_row);
     RUN_TEST(test_switch_mode_text);
     RUN_TEST(test_switch_mode_hex);
     RUN_TEST(test_switch_mode_disassembler);
@@ -180,6 +174,6 @@ int main(void) {
     RUN_TEST(test_resize_preserves_position_and_reflows);
     RUN_TEST(test_resize_too_small_and_recovery);
     RUN_TEST(test_hex_width_fits_terminal);
-    RUN_TEST(test_get_row_len_past_eof);
+    RUN_TEST(test_switch_mode_clamps_cursor_and_scroll_without_overflow);
     TEST_REPORT();
 }

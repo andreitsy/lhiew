@@ -26,7 +26,8 @@ static void setup_file_data(const void *data, size_t len) {
     int fd = fileno(global_cfg.fp);
     struct stat st;
     fstat(fd, &st);
-    global_cfg.num_bytes = st.st_size;
+    ASSERT(st.st_size >= 0);
+    global_cfg.num_bytes = (size_t)st.st_size;
     global_cfg.file = mmap(NULL, global_cfg.num_bytes, PROT_READ, MAP_PRIVATE, fd, 0);
     global_cfg.numrows = global_cfg.num_bytes / global_cfg.cur_screencols + 1;
     global_cfg.screenrows = 24;
@@ -105,38 +106,6 @@ static int frame_fits(const append_buffer *ab, size_t rows, size_t cols) {
     return 1;
 }
 
-static void test_get_byte_position_origin(void) {
-    RESET_GLOBAL_CFG();
-    global_cfg.cx = 0;
-    global_cfg.cy = 0;
-    global_cfg.cur_screencols = 80;
-    global_cfg.num_bytes = 1000;
-
-    ASSERT_EQ(get_byte_position(), (size_t)0);
-}
-
-static void test_get_byte_position_mid(void) {
-    RESET_GLOBAL_CFG();
-    global_cfg.cx = 10;
-    global_cfg.cy = 5;
-    global_cfg.cur_screencols = 80;
-    global_cfg.num_bytes = 1000;
-
-    /* 10 + 80*5 = 410 */
-    ASSERT_EQ(get_byte_position(), (size_t)410);
-}
-
-static void test_get_byte_position_clamp(void) {
-    RESET_GLOBAL_CFG();
-    global_cfg.cx = 50;
-    global_cfg.cy = 100;
-    global_cfg.cur_screencols = 80;
-    global_cfg.num_bytes = 100;
-
-    /* 50 + 80*100 = 8050 > 100 → clamp to 100 */
-    ASSERT_EQ(get_byte_position(), (size_t)100);
-}
-
 static void test_draw_row_text_printable(void) {
     const char data[] = "ABCDEFGHIJ";
     setup_file_data(data, 10);
@@ -200,7 +169,6 @@ static void test_editor_scroll_down(void) {
     global_cfg.cur_screencols = 80;
     global_cfg.numrows = 100;
     global_cfg.rowoff = 0;
-    global_cfg.coloff = 0;
     global_cfg.cy = 30;
     global_cfg.cx = 5;
 
@@ -216,7 +184,6 @@ static void test_editor_scroll_up(void) {
     global_cfg.cur_screencols = 80;
     global_cfg.numrows = 100;
     global_cfg.rowoff = 20;
-    global_cfg.coloff = 0;
     global_cfg.cy = 10;
     global_cfg.cx = 0;
 
@@ -467,11 +434,38 @@ static void test_edit_cursor_and_prompts_fit_after_resize(void) {
     teardown();
 }
 
+static void test_long_prompts_scroll_and_sanitize_input(void) {
+    RESET_GLOBAL_CFG();
+    editor_resize(5, 24);
+    global_cfg.search_prompt = 1;
+    global_cfg.search_input_length = sizeof(global_cfg.search_input) - 1;
+    memset(global_cfg.search_input, 'a', global_cfg.search_input_length);
+    global_cfg.search_input[global_cfg.search_input_length] = '\0';
+    append_buffer ab = ABUF_INIT;
+    editor_draw_screen(&ab);
+    ASSERT(frame_fits(&ab, 5, 24));
+    char *plain = plain_output(&ab);
+    ASSERT(strstr(plain, "< aaaaaaaaaaaaaaaaaaaaa") != NULL);
+    free(plain);
+    free_append_buffer(&ab);
+
+    global_cfg.search_prompt = 0;
+    global_cfg.executable_browser = 1;
+    global_cfg.executable_prompt = 1;
+    global_cfg.executable_input_length = sizeof(global_cfg.executable_input) - 1;
+    memset(global_cfg.executable_input, 'b', global_cfg.executable_input_length);
+    memcpy(global_cfg.executable_input + global_cfg.executable_input_length - 3, "\x1b\n\xff", 4);
+    editor_draw_screen(&ab);
+    ASSERT(frame_fits(&ab, 5, 24));
+    plain = plain_output(&ab);
+    ASSERT(strstr(plain, "< bbbbbbbbbbbbbbbbbb@.?") != NULL);
+    free(plain);
+    free_append_buffer(&ab);
+    free(global_cfg.disassembler_buffer);
+}
+
 int main(void) {
     printf("test_render:\n");
-    RUN_TEST(test_get_byte_position_origin);
-    RUN_TEST(test_get_byte_position_mid);
-    RUN_TEST(test_get_byte_position_clamp);
     RUN_TEST(test_draw_row_text_printable);
     RUN_TEST(test_draw_row_text_control_chars);
     RUN_TEST(test_draw_row_text_high_bytes);
@@ -486,5 +480,6 @@ int main(void) {
     RUN_TEST(test_empty_and_eof_frames_fit);
     RUN_TEST(test_status_and_messages_sanitize_control_bytes);
     RUN_TEST(test_edit_cursor_and_prompts_fit_after_resize);
+    RUN_TEST(test_long_prompts_scroll_and_sanitize_input);
     TEST_REPORT();
 }

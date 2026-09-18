@@ -107,13 +107,17 @@ python3 tests/import_fixtures.py /tmp/lhiew-import-examples
 The [fixture generator](../tests/import_fixtures.py) supplies examples for PE32,
 PE32+, NE, LE, LX and NLM.
 The parser tests serialize independent records and exercise malformed spans,
-record boundaries, counts, fixup encodings and unsupported forms.
+record boundaries, counts, fixup encodings and unsupported forms. Parsers share
+unaligned endian readers and overflow-safe span checks; automatic detection and
+the browser share NLM variable-header validation. PE overlap checks sort copies
+of section intervals, preserving the displayed section order.
 [Terminal tests](../tests/test_executable_browser.py)
 follow the visible browse → edit → save → reopen path for each format, together
 with cancellation, backup protection, key handling and resizing. Backup tests
 also cover sparse files beyond 4 GiB and failed-copy cleanup.
 
-Run `ctest --test-dir build --output-on-failure`. These targeted fixtures do not
+Run `ctest --test-dir build --output-on-failure`; repeat with the
+[Release and sanitizer configurations](development.md#build-and-test). These targeted fixtures do not
 establish compatibility with every historical linker or executable variant.
 
 ## Format references

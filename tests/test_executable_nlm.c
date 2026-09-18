@@ -1,4 +1,5 @@
 #include "lhiew/types.h"
+#include "lhiew/binary.h"
 #include "lhiew/executable.h"
 #include "test_harness.h"
 
@@ -200,6 +201,55 @@ static void test_nlm_reference_inspection_limit(void) {
     free(data);
 }
 
+static void test_nlm_maximum_header_strings_and_every_truncation(void) {
+    uint8_t storage[513];
+    uint8_t *data = storage + 1; /* Serialized fields need not be aligned. */
+    make_nlm(data);
+    memset(data + 42, 0, 88); /* No images or auxiliary tables. */
+    size_t cursor = 130;
+    const uint8_t lengths[] = {127, 71, 17};
+    for (size_t i = 0; i < sizeof(lengths); ++i) {
+        data[cursor++] = lengths[i];
+        memset(data + cursor, 'A' + (int)i, lengths[i]);
+        cursor += lengths[i];
+        data[cursor++] = 0;
+        if (i == 0) cursor += 14;
+    }
+    executableInfo info = {0};
+    binaryInfo binary;
+    executable_parse(data, cursor, &info);
+    binary_detect(data, cursor, &binary);
+    ASSERT_EQ(info.status, EXE_OK);
+    ASSERT_EQ(binary.status, BINARY_DETECTED);
+    ASSERT_EQ(info.count, (size_t)1);
+    ASSERT_EQ(info.rows[0].length, cursor);
+    ASSERT(!binary.has_entry);
+    for (size_t size = 130; size < cursor; ++size) {
+        executable_parse(data, size, &info);
+        binary_detect(data, size, &binary);
+        ASSERT_EQ(info.status, EXE_MALFORMED);
+        ASSERT_EQ(binary.status, BINARY_MALFORMED);
+    }
+    data[cursor - 1] = 'X';
+    executable_parse(data, cursor, &info);
+    binary_detect(data, cursor, &binary);
+    ASSERT_EQ(info.status, EXE_MALFORMED);
+    ASSERT_EQ(binary.status, BINARY_MALFORMED);
+    executable_free(&info);
+}
+
+static void test_nlm_percent_signs_are_literal_names(void) {
+    uint8_t data[512];
+    make_nlm(data);
+    memcpy(data + 337, "f%s%n?", 6);
+    executableInfo info = {0};
+    executable_parse(data, sizeof(data), &info);
+    ASSERT_EQ(info.status, EXE_OK);
+    ASSERT_STR_EQ(info.rows[4].label, "Import: f%s%n? [global; 2 references]");
+    ASSERT(info.rows[4].editable);
+    executable_free(&info);
+}
+
 int main(void) {
     RUN_TEST(test_nlm_navigation_and_imports);
     RUN_TEST(test_nlm_equal_length_renaming_preserves_references);
@@ -208,5 +258,7 @@ int main(void) {
     RUN_TEST(test_nlm_malformed_header_and_ranges);
     RUN_TEST(test_nlm_malformed_names_and_truncation);
     RUN_TEST(test_nlm_reference_inspection_limit);
+    RUN_TEST(test_nlm_maximum_header_strings_and_every_truncation);
+    RUN_TEST(test_nlm_percent_signs_are_literal_names);
     TEST_REPORT();
 }

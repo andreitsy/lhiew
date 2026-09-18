@@ -16,7 +16,9 @@ typedef struct hexPatch {
     const uint8_t *bytes;
     size_t length;
 } hexPatch;
-/* Stage a complete field change (and any mirrored fields) or change nothing. */
+/* Stage all spans or change nothing. Empty spans may have NULL bytes; an empty
+   list may be NULL. Later overlapping spans take precedence. Source byte arrays
+   must remain unchanged throughout the call (do not alias the edited mapping). */
 int hex_edit_patch(const hexPatch *patches, size_t count);
 int hex_edit_save(void);
 void hex_edit_cancel(void);

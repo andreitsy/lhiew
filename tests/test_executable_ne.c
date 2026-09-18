@@ -105,9 +105,13 @@ static void test_ne_reparse_shared_names_and_ordinal(void) {
     put16(data + NE_RELOCS + 14, 456);
     executable_parse(data, sizeof(data), &info);
     ASSERT_EQ(info.status, EXE_OK);
-    ASSERT_STR_EQ(find_row(&info, EXE_IMPORT, 0)->label, "SYSTEM!OtherExit [segment 1]");
-    ASSERT_STR_EQ(find_row(&info, EXE_IMPORT, 2)->label, "SYSTEM!OtherExit [segment 1]");
-    ASSERT_STR_EQ(find_row(&info, EXE_IMPORT, 1)->label, "USER!#456 [segment 1]");
+    first = find_row(&info, EXE_IMPORT, 0);
+    shared = find_row(&info, EXE_IMPORT, 2);
+    executableRow *ordinal = find_row(&info, EXE_IMPORT, 1);
+    ASSERT(first && shared && ordinal);
+    ASSERT_STR_EQ(first->label, "SYSTEM!OtherExit [segment 1]");
+    ASSERT_STR_EQ(shared->label, "SYSTEM!OtherExit [segment 1]");
+    ASSERT_STR_EQ(ordinal->label, "USER!#456 [segment 1]");
     executable_free(&info);
 }
 
@@ -205,7 +209,9 @@ static void test_ne_no_imports_and_zero_fill_segment(void) {
     ASSERT_EQ(info.status, EXE_OK);
     ASSERT(!find_row(&info, EXE_MODULE, 0));
     ASSERT(!find_row(&info, EXE_IMPORT, 0));
-    ASSERT_EQ(find_row(&info, EXE_REGION, 0)->offset, (size_t)NE_SEGMENT);
+    executableRow *region = find_row(&info, EXE_REGION, 0);
+    ASSERT_NE(region, NULL);
+    ASSERT_EQ(region->offset, (size_t)NE_SEGMENT);
     executable_free(&info);
 }
 
@@ -312,9 +318,12 @@ static void test_ne_iterated_and_additive_fixups(void) {
     executableInfo info = {0};
     executable_parse(data, sizeof(data), &info);
     ASSERT_EQ(info.status, EXE_OK);
-    ASSERT(strstr(find_row(&info, EXE_REGION, 0)->label, "iterated"));
-    ASSERT_EQ(find_row(&info, EXE_IMPORT, 0)->offset, (size_t)NE_RELOCS);
-    ASSERT_STR_EQ(find_row(&info, EXE_IMPORT, 0)->label, "KERNEL!FatalExit [segment 1]");
+    executableRow *region = find_row(&info, EXE_REGION, 0);
+    executableRow *import = find_row(&info, EXE_IMPORT, 0);
+    ASSERT(region && import);
+    ASSERT(strstr(region->label, "iterated"));
+    ASSERT_EQ(import->offset, (size_t)NE_RELOCS);
+    ASSERT_STR_EQ(import->label, "KERNEL!FatalExit [segment 1]");
     executable_free(&info);
 }
 

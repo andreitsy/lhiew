@@ -17,13 +17,15 @@ typedef struct instructionDecoder {
     ZydisFormatter formatter;
     csh capstone;
     cs_insn *instruction;
-    binaryRegion region;
-    int has_region;
+    const binaryInfo *info;
+    size_t alignment;
     int enabled;
 } instructionDecoder;
 
 static int decoder_init(instructionDecoder *decoder) {
     memset(decoder, 0, sizeof(*decoder));
+    decoder->info = architecture_binary_info();
+    decoder->alignment = architecture_alignment();
     if (global_cfg.architecture == ARCH_UNKNOWN)
         return 1;
     if (global_cfg.architecture == ARCH_X86) {
@@ -91,22 +93,21 @@ static size_t decode_instruction(instructionDecoder *decoder, size_t offset,
     size_t length = global_cfg.num_bytes - offset;
     if (offset < anchor && anchor - offset < length)
         length = anchor - offset;
-    const binaryInfo *info = architecture_binary_info();
+    const binaryInfo *info = decoder->info;
     if (info && info->has_entry && offset < info->entry_offset &&
         info->entry_offset - offset < length)
         length = info->entry_offset - offset;
     /* A section can start inside a broader mapped segment. Resolve each row
        so it gets the tighter boundary and its own runtime address. */
-    decoder->has_region = architecture_region(offset, &decoder->region);
+    binaryRegion region;
     uint64_t address = offset;
-    if (decoder->has_region) {
-        size_t within = offset - decoder->region.offset;
-        address = decoder->region.address + within;
-        if (decoder->region.size - within < length)
-            length = decoder->region.size - within;
+    if (architecture_region(offset, &region)) {
+        size_t within = offset - region.offset;
+        address = region.address + within;
+        if (region.size - within < length)
+            length = region.size - within;
     }
-    size_t alignment = architecture_alignment();
-    if (!decoder->enabled || address % alignment)
+    if (!decoder->enabled || address % decoder->alignment)
         goto invalid;
 
     if (global_cfg.architecture == ARCH_X86) {
@@ -115,7 +116,7 @@ static size_t decode_instruction(instructionDecoder *decoder, size_t offset,
         if (!ZYAN_SUCCESS(ZydisDecoderDecodeFull(&decoder->zydis, global_cfg.file + offset,
                                                  length, &instruction, operands)))
             goto invalid;
-        if (text && !ZYAN_SUCCESS(ZydisFormatterFormatInstruction(
+        if (!ZYAN_SUCCESS(ZydisFormatterFormatInstruction(
                 &decoder->formatter, &instruction, operands, instruction.operand_count_visible,
                 text, DISASSEMBLED_BUFFER_SIZE, address, ZYAN_NULL)))
             goto invalid;
@@ -126,17 +127,14 @@ static size_t decode_instruction(instructionDecoder *decoder, size_t offset,
     size_t available = length;
     if (cs_disasm_iter(decoder->capstone, &bytes, &length, &address, decoder->instruction) &&
         decoder->instruction->size && decoder->instruction->size <= available) {
-        if (text) {
-            snprintf(text, DISASSEMBLED_BUFFER_SIZE, "%s%s%.94s",
-                     decoder->instruction->mnemonic, decoder->instruction->op_str[0] ? " " : "",
-                     decoder->instruction->op_str);
-        }
+        snprintf(text, DISASSEMBLED_BUFFER_SIZE, "%s%s%.94s",
+                 decoder->instruction->mnemonic, decoder->instruction->op_str[0] ? " " : "",
+                 decoder->instruction->op_str);
         return decoder->instruction->size;
     }
 
 invalid:
-    if (text)
-        snprintf(text, DISASSEMBLED_BUFFER_SIZE, "db %02X", global_cfg.file[offset]);
+    snprintf(text, DISASSEMBLED_BUFFER_SIZE, "db %02X", global_cfg.file[offset]);
     return 1;
 }
 
@@ -163,10 +161,8 @@ int disassemble_block(size_t cur_byte) {
     }
 
     instructionDecoder decoder;
-    if (!decoder_init(&decoder)) {
+    if (!decoder_init(&decoder))
         die_safely("Failed to initialize disassembler");
-        return EXIT_FAILURE;
-    }
     size_t context_rows = global_cfg.screenrows / 2;
     /* Variable-length backward decoding is heuristic. Preserve known entry and
        cached instruction boundaries, and align fixed-width architectures. */
@@ -180,7 +176,7 @@ int disassemble_block(size_t cur_byte) {
     binaryRegion region;
     if (architecture_region(cur_byte, &region) && read_offset < region.offset)
         read_offset = region.offset;
-    size_t alignment = architecture_alignment();
+    size_t alignment = decoder.alignment;
     if (architecture_region(read_offset, &region)) {
         size_t remainder = (region.address % alignment +
                             (read_offset - region.offset) % alignment) % alignment;
@@ -189,7 +185,7 @@ int disassemble_block(size_t cur_byte) {
     } else {
         read_offset -= read_offset % alignment;
     }
-    const binaryInfo *info = architecture_binary_info();
+    const binaryInfo *info = decoder.info;
     if (info && info->has_entry && read_offset <= info->entry_offset &&
         info->entry_offset <= cur_byte)
         anchor = info->entry_offset;

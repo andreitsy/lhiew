@@ -4,13 +4,13 @@
 #include "lhiew/types.h"
 
 /* Translate typed prompt text into pattern bytes. Hexadecimal input accepts
-   whitespace between digits and needs complete pairs; text input is literal.
-   Returns nonzero and sets *length on success, leaving *length zero when the
-   input is empty. Writes at most SEARCH_PATTERN_MAX bytes. */
+   spaces or tabs between complete byte pairs and needs complete pairs; text input is literal.
+   Returns nonzero and sets *length on success, leaving *length zero for empty
+   or invalid input. Writes at most SEARCH_PATTERN_MAX bytes. */
 int search_compile(const char *text, size_t text_length, int ascii,
                    uint8_t *pattern, size_t *length);
-/* Scan for pattern starting at (not before) from, or ending at or before from
-   when searching backward. Returns nonzero and sets *found on a match. */
+/* Scan for a match starting at or after from (forward), or at or before from
+   (backward). Returns nonzero and sets *found on a match. */
 int search_find(const uint8_t *data, size_t size, const uint8_t *pattern,
                 size_t length, size_t from, int backward, size_t *found);
 

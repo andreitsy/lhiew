@@ -1,13 +1,47 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.21)
 project(lhiew C)
 
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
+option(LHIEW_WARNINGS_AS_ERRORS "Treat LHiew compiler warnings as errors" ON)
+option(LHIEW_FAST_RELEASE "Use aggressive optimization in Release builds" ON)
+option(LHIEW_SANITIZERS "Enable address and undefined-behavior sanitizers" OFF)
+
+# Share first-party policy without imposing warnings on vendored decoders.
+add_library(lhiew_options INTERFACE)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(lhiew_options INTERFACE
+        -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow
+        -Wstrict-prototypes -Wmissing-prototypes -Wformat=2 -Wundef
+        -Wwrite-strings -Wcast-qual -Wcast-align -Wpointer-arith -Wvla
+        -Wnull-dereference -Wdouble-promotion
+        $<$<BOOL:${LHIEW_WARNINGS_AS_ERRORS}>:-Werror>)
+    if(LHIEW_FAST_RELEASE)
+        if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+            target_compile_options(lhiew_options INTERFACE $<$<CONFIG:Release>:-Ofast>)
+        else()
+            # Clang 19 deprecated -Ofast; these are its documented equivalents.
+            target_compile_options(lhiew_options INTERFACE
+                $<$<CONFIG:Release>:-O3;-ffast-math;-fstrict-aliasing>)
+        endif()
+    endif()
+    if(LHIEW_SANITIZERS)
+        target_compile_options(lhiew_options INTERFACE
+            -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all)
+        target_link_options(lhiew_options INTERFACE
+            -fsanitize=address,undefined -fno-sanitize-recover=all)
+    endif()
+elseif(LHIEW_SANITIZERS OR LHIEW_FAST_RELEASE)
+    message(FATAL_ERROR "LHiew optimization/sanitizer options require GCC or Clang")
+endif()
+
 # --- Zydis submodule ---
 option(ZYDIS_BUILD_TOOLS "" OFF)
 option(ZYDIS_BUILD_EXAMPLES "" OFF)
+set(ZYDIS_FEATURE_ENCODER OFF CACHE BOOL "LHiew only decodes instructions" FORCE)
+option(ZYDIS_BUILD_DOXYGEN "" OFF)
 add_subdirectory(deps/zydis)
 
 # --- Pinned Capstone submodule (native non-x86 decoders) ---
@@ -56,50 +90,37 @@ add_library(lhiew_core STATIC
 
 target_include_directories(lhiew_core PUBLIC include)
 target_compile_definitions(lhiew_core PUBLIC _FILE_OFFSET_BITS=64)
-target_link_libraries(lhiew_core PUBLIC Zydis capstone_static)
-target_compile_options(lhiew_core PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(lhiew_core PUBLIC Zydis capstone_static lhiew_options)
 
 # --- Main executable ---
 add_executable(lhiew src/main.c)
 target_link_libraries(lhiew PRIVATE lhiew_core)
-target_compile_options(lhiew PRIVATE -Wall -Wextra -Wpedantic)
 
 # --- Tests ---
-enable_testing()
+include(CTest)
+if(NOT BUILD_TESTING)
+    return()
+endif()
 
-macro(lhiew_add_test name)
+function(lhiew_add_test name)
     add_executable(test_${name} tests/test_${name}.c)
     target_link_libraries(test_${name} PRIVATE lhiew_core)
-    target_compile_options(test_${name} PRIVATE -Wall -Wextra -Wpedantic)
     add_test(NAME ${name} COMMAND test_${name})
-endmacro()
+endfunction()
 
-lhiew_add_test(append_buffer)
-lhiew_add_test(types)
-lhiew_add_test(editor)
-lhiew_add_test(file_buffer)
-lhiew_add_test(file_backup)
-lhiew_add_test(hex_edit)
+foreach(module append_buffer types editor file_buffer file_backup hex_edit
+        render input disassembler binary_fixtures architectures binary search
+        executable_pe executable_ne executable_linear executable_nlm)
+    lhiew_add_test(${module})
+endforeach()
 # Compile the same backend with deterministic I/O/allocation fault injection.
 # The test object satisfies its symbols before the static core is searched.
 add_library(hex_edit_test_backend OBJECT src/hex_edit.c)
 target_link_libraries(hex_edit_test_backend PRIVATE lhiew_core)
-target_compile_options(hex_edit_test_backend PRIVATE -Wall -Wextra -Wpedantic)
 target_compile_definitions(hex_edit_test_backend PRIVATE
     HEX_PWRITE=hex_test_pwrite HEX_FSYNC=hex_test_fsync HEX_REALLOC=hex_test_realloc
     HEX_PREAD=hex_test_pread)
 target_sources(test_hex_edit PRIVATE $<TARGET_OBJECTS:hex_edit_test_backend>)
-lhiew_add_test(render)
-lhiew_add_test(input)
-lhiew_add_test(disassembler)
-lhiew_add_test(binary_fixtures)
-lhiew_add_test(architectures)
-lhiew_add_test(binary)
-lhiew_add_test(search)
-lhiew_add_test(executable_pe)
-lhiew_add_test(executable_ne)
-lhiew_add_test(executable_linear)
-lhiew_add_test(executable_nlm)
 target_compile_definitions(test_architectures PRIVATE
     LHIEW_ARCHITECTURE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/architecture_fixtures")
 target_compile_definitions(test_binary_fixtures PRIVATE
@@ -114,25 +135,14 @@ if(UNIX)
         add_test(NAME architecture_fixture_integrity
             COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/architecture_fixtures/generate.py --check)
-        add_test(NAME terminal_resize
-            COMMAND ${Python3_EXECUTABLE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_terminal_resize.py
-                $<TARGET_FILE:lhiew>)
+        foreach(test terminal_resize hex_editor executable_browser search_ui)
+            add_test(NAME ${test}
+                COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_${test}.py
+                    $<TARGET_FILE:lhiew>)
+            set_tests_properties(${test} PROPERTIES TIMEOUT 90)
+        endforeach()
         set_tests_properties(terminal_resize PROPERTIES TIMEOUT 30)
-        add_test(NAME hex_editor
-            COMMAND ${Python3_EXECUTABLE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_hex_editor.py
-                $<TARGET_FILE:lhiew>)
-        set_tests_properties(hex_editor PROPERTIES TIMEOUT 90)
-        add_test(NAME executable_browser
-            COMMAND ${Python3_EXECUTABLE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_executable_browser.py
-                $<TARGET_FILE:lhiew>)
-        set_tests_properties(executable_browser PROPERTIES TIMEOUT 90)
-        add_test(NAME search_ui
-            COMMAND ${Python3_EXECUTABLE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_search_ui.py
-                $<TARGET_FILE:lhiew>)
         set_tests_properties(search_ui PROPERTIES TIMEOUT 60)
     endif()
 endif()

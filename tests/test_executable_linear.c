@@ -167,9 +167,13 @@ static void test_linear_in_place_name_and_ordinal_roundtrip(void) {
     put32(f.bytes + ordinal->ordinal_offset, 0x12345678);
     executable_parse(f.bytes, f.size, &info);
     ASSERT_EQ(info.status, EXE_OK);
-    ASSERT_STR_EQ(find_row(&info, EXE_IMPORT, 0)->label, "NEWMODUL!DosRead");
-    ASSERT_STR_EQ(find_row(&info, EXE_IMPORT, 2)->label, "NEWMODUL!DosRead");
-    ASSERT_EQ(find_row(&info, EXE_IMPORT, 1)->ordinal, 0x12345678);
+    name = find_row(&info, EXE_IMPORT, 0);
+    ordinal = find_row(&info, EXE_IMPORT, 1);
+    executableRow *shared = find_row(&info, EXE_IMPORT, 2);
+    ASSERT(name && ordinal && shared);
+    ASSERT_STR_EQ(name->label, "NEWMODUL!DosRead");
+    ASSERT_STR_EQ(shared->label, "NEWMODUL!DosRead");
+    ASSERT_EQ(ordinal->ordinal, 0x12345678);
     executable_free(&info);
 }
 

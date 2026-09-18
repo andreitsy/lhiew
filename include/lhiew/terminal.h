@@ -24,7 +24,7 @@ enum editorKey {
     CTRL_END,
 };
 
-void die_safely(const char *s);
+_Noreturn void die_safely(const char *s);
 void enable_raw_mode(void);
 void disable_raw_mode(void);
 int  editor_read_key(void);

@@ -20,6 +20,10 @@ the detected CPU, instruction endianness, format, and file entry offset, and che
 the complete instruction sequence: instruction boundaries, mnemonic, and operands.
 The same suite exercises manual profiles, restoring Auto detection, mapped branch
 targets, malformed headers, invalid/truncated instructions, navigation, and resizing.
+It also checks out-of-range profile selection, automatic profile labels and
+rejection of detection metadata after the mapped pointer or file size changes.
+Use the [Debug, Release and sanitizer build matrix](../../docs/development.md#build-and-test)
+to exercise the same independent expectations under different compiler modes.
 
 | Fixtures | Header/CPU and representative instructions |
 | --- | --- |

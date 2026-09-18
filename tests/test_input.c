@@ -5,46 +5,12 @@
 #include "lhiew/editor.h"
 #include "lhiew/terminal.h"
 
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <unistd.h>
-
-static const char *TMP_FILE = "/tmp/lhiew_test_input.bin";
-
 static void setup_text_mode(size_t nbytes, size_t cols) {
     RESET_GLOBAL_CFG();
-
-    /* Create a temp file with nbytes of data */
-    FILE *f = fopen(TMP_FILE, "wb");
-    for (size_t i = 0; i < nbytes; i++) {
-        uint8_t b = (uint8_t)(i & 0xFF);
-        fwrite(&b, 1, 1, f);
-    }
-    fclose(f);
-
-    global_cfg.fp = fopen(TMP_FILE, "rb");
-    global_cfg.filename = strdup(TMP_FILE);
-    int fd = fileno(global_cfg.fp);
-    struct stat st;
-    fstat(fd, &st);
-    global_cfg.num_bytes = st.st_size;
-    global_cfg.file = mmap(NULL, global_cfg.num_bytes, PROT_READ, MAP_PRIVATE, fd, 0);
-
-    global_cfg.mode = TEXT_MODE;
-    global_cfg.cur_screencols = cols;
+    global_cfg.num_bytes = nbytes;
     global_cfg.screencols = cols;
-    global_cfg.numrows = global_cfg.num_bytes / cols + 1;
     global_cfg.screenrows = 24;
-    global_cfg.cx = 0;
-    global_cfg.cy = 0;
-    global_cfg.cur_byte = 0;
-}
-
-static void teardown(void) {
-    if (global_cfg.fp) { fclose(global_cfg.fp); global_cfg.fp = NULL; }
-    free(global_cfg.filename);
-    global_cfg.filename = NULL;
-    unlink(TMP_FILE);
+    switch_mode();
 }
 
 static void test_move_right(void) {
@@ -53,7 +19,6 @@ static void test_move_right(void) {
     ASSERT_EQ(global_cfg.cx, (size_t)1);
     ASSERT_EQ(global_cfg.cy, (size_t)0);
     ASSERT_EQ(global_cfg.cur_byte, (size_t)1);
-    teardown();
 }
 
 static void test_move_left_at_origin(void) {
@@ -63,7 +28,6 @@ static void test_move_left_at_origin(void) {
     ASSERT_EQ(global_cfg.cx, (size_t)0);
     ASSERT_EQ(global_cfg.cy, (size_t)0);
     ASSERT_EQ(global_cfg.cur_byte, (size_t)0);
-    teardown();
 }
 
 static void test_move_down(void) {
@@ -71,7 +35,6 @@ static void test_move_down(void) {
     editor_move_cursor(ARROW_DOWN);
     ASSERT_EQ(global_cfg.cy, (size_t)1);
     ASSERT_EQ(global_cfg.cur_byte, (size_t)16);
-    teardown();
 }
 
 static void test_move_up_from_row1(void) {
@@ -81,7 +44,6 @@ static void test_move_up_from_row1(void) {
     editor_move_cursor(ARROW_UP);
     ASSERT_EQ(global_cfg.cy, (size_t)0);
     ASSERT_EQ(global_cfg.cur_byte, (size_t)0);
-    teardown();
 }
 
 static void test_vim_keys(void) {
@@ -94,7 +56,6 @@ static void test_vim_keys(void) {
     ASSERT_EQ(global_cfg.cur_byte, (size_t)16);
     editor_move_cursor('k');
     ASSERT_EQ(global_cfg.cur_byte, (size_t)0);
-    teardown();
 }
 
 static void test_move_right_wraps_row(void) {
@@ -107,14 +68,14 @@ static void test_move_right_wraps_row(void) {
     ASSERT_EQ(global_cfg.cy, (size_t)1);
     ASSERT_EQ(global_cfg.cx, (size_t)0);
     ASSERT_EQ(global_cfg.cur_byte, (size_t)4);
-    teardown();
 }
 
 static void test_hex_mode_cursor(void) {
     setup_text_mode(256, 80);
     global_cfg.mode = HEX_MODE;
-    global_cfg.cur_screencols = HEX_BYTE_LENGTH;
-    global_cfg.numrows = 256 / HEX_BYTE_LENGTH + 1;
+    switch_mode();
+    /* At 80 columns the adaptive hex layout fits sixteen bytes per row. */
+    ASSERT_EQ(global_cfg.cur_screencols, (size_t)16);
 
     editor_move_cursor(ARROW_RIGHT);
     ASSERT_EQ(global_cfg.cur_byte, (size_t)1);
@@ -124,7 +85,6 @@ static void test_hex_mode_cursor(void) {
     ASSERT_EQ(global_cfg.cur_byte, (size_t)17);
     ASSERT_EQ(global_cfg.cy, (size_t)1);
 
-    teardown();
 }
 
 static void test_ctrl_key_macro(void) {
@@ -150,7 +110,6 @@ static void test_partial_row_navigation_after_resize(void) {
     ASSERT_EQ(global_cfg.cx, (size_t)23);
     ASSERT_EQ(global_cfg.cy, (size_t)3);
     free(global_cfg.disassembler_buffer);
-    teardown();
 }
 
 static void test_navigation_pauses_while_too_small(void) {
@@ -163,7 +122,6 @@ static void test_navigation_pauses_while_too_small(void) {
     editor_move_cursor(ARROW_RIGHT);
     ASSERT_EQ(global_cfg.cur_byte, (size_t)46);
     free(global_cfg.disassembler_buffer);
-    teardown();
 }
 
 static void test_disassembler_navigation_after_resize_and_eof(void) {
@@ -322,7 +280,69 @@ static void test_text_and_hex_pages_preserve_existing_distances(void) {
     editor_move_cursor(PAGE_UP);
     ASSERT_EQ(global_cfg.cur_byte, (size_t)0);
     free_disassembler_buffer();
-    teardown();
+}
+
+static void test_prompt_editing_respects_capacity_and_controls(void) {
+    char text[4] = "";
+    size_t length = 0;
+    ASSERT_EQ(editor_prompt_key(text, &length, sizeof(text), 127), 1);
+    ASSERT_EQ(length, (size_t)0);
+    for (int key = 'a'; key <= 'c'; ++key)
+        ASSERT_EQ(editor_prompt_key(text, &length, sizeof(text), key), 1);
+    ASSERT_EQ(editor_prompt_key(text, &length, sizeof(text), 'd'), -1);
+    ASSERT_EQ(length, (size_t)3);
+    ASSERT_STR_EQ(text, "abc");
+    ASSERT_EQ(editor_prompt_key(text, &length, sizeof(text), '\x1b'), 0);
+    ASSERT_EQ(editor_prompt_key(text, &length, sizeof(text), ARROW_LEFT), 0);
+    ASSERT_EQ(editor_prompt_key(text, &length, sizeof(text), 0xff), 0);
+    ASSERT_STR_EQ(text, "abc");
+    ASSERT_EQ(editor_prompt_key(text, &length, sizeof(text), CTRL_KEY('h')), 1);
+    ASSERT_STR_EQ(text, "ab");
+    ASSERT_EQ(editor_prompt_key(text, &length, sizeof(text), CTRL_KEY('u')), 1);
+    ASSERT_EQ(length, (size_t)0);
+    ASSERT_STR_EQ(text, "");
+    ASSERT_EQ(editor_prompt_key(text, &length, 1, 'x'), -1);
+    ASSERT_EQ(editor_prompt_key(NULL, &length, 0, CTRL_KEY('u')), 0);
+}
+
+static void test_menu_navigation_clamps_empty_stale_and_huge_choices(void) {
+    RESET_GLOBAL_CFG();
+    global_cfg.screenrows = 5;
+    ASSERT_EQ(editor_menu_choice(SIZE_MAX, 0, PAGE_DOWN), (size_t)0);
+    ASSERT_EQ(editor_menu_choice(SIZE_MAX, 10, ARROW_DOWN), (size_t)9);
+    ASSERT_EQ(editor_menu_choice(0, 10, ARROW_UP), (size_t)0);
+    ASSERT_EQ(editor_menu_choice(2, 10, PAGE_UP), (size_t)0);
+    ASSERT_EQ(editor_menu_choice(2, 10, PAGE_DOWN), (size_t)6);
+    ASSERT_EQ(editor_menu_choice(8, 10, PAGE_DOWN), (size_t)9);
+    ASSERT_EQ(editor_menu_choice(5, 10, HOME_KEY), (size_t)0);
+    ASSERT_EQ(editor_menu_choice(5, 10, END_KEY), (size_t)9);
+    global_cfg.screenrows = SIZE_MAX;
+    ASSERT_EQ(editor_menu_choice(SIZE_MAX - 2, SIZE_MAX, PAGE_DOWN), SIZE_MAX - 1);
+    ASSERT_EQ(editor_menu_choice(SIZE_MAX, SIZE_MAX, ARROW_DOWN), SIZE_MAX - 1);
+    global_cfg.screenrows = 0;
+    ASSERT_EQ(editor_menu_choice(1, 10, PAGE_UP), (size_t)0);
+    ASSERT_EQ(editor_menu_choice(1, 10, PAGE_DOWN), (size_t)2);
+}
+
+static void test_pages_and_row_boundaries_clamp_without_overflow(void) {
+    setup_text_mode(101, 24);
+    global_cfg.cur_byte = 99;
+    switch_mode();
+    editor_move_cursor(END_KEY);
+    ASSERT_EQ(global_cfg.cur_byte, (size_t)100);
+    editor_move_cursor(HOME_KEY);
+    ASSERT_EQ(global_cfg.cur_byte, (size_t)96);
+    global_cfg.screenrows = SIZE_MAX;
+    editor_move_cursor(PAGE_DOWN);
+    ASSERT_EQ(global_cfg.cur_byte, (size_t)101);
+    editor_move_cursor(END_KEY);
+    ASSERT_EQ(global_cfg.cur_byte, (size_t)101);
+    editor_move_cursor(PAGE_UP);
+    ASSERT_EQ(global_cfg.cur_byte, (size_t)0);
+    editor_move_cursor(CTRL_END);
+    ASSERT_EQ(global_cfg.cur_byte, (size_t)100);
+    editor_move_cursor(CTRL_HOME);
+    ASSERT_EQ(global_cfg.cur_byte, (size_t)0);
 }
 
 int main(void) {
@@ -344,5 +364,8 @@ int main(void) {
     RUN_TEST(test_disassembler_pages_with_invalid_bytes_and_empty_file);
     RUN_TEST(test_disassembler_pages_pause_while_too_small);
     RUN_TEST(test_text_and_hex_pages_preserve_existing_distances);
+    RUN_TEST(test_prompt_editing_respects_capacity_and_controls);
+    RUN_TEST(test_menu_navigation_clamps_empty_stale_and_huge_choices);
+    RUN_TEST(test_pages_and_row_boundaries_clamp_without_overflow);
     TEST_REPORT();
 }

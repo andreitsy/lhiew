@@ -1,4 +1,5 @@
 #include "lhiew/types.h"
+#include "file_state.h"
 #include "lhiew/file_backup.h"
 
 #include <errno.h>
@@ -7,30 +8,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static int backup_same_identity(const struct stat *a, const struct stat *b) {
-    return a->st_dev == b->st_dev && a->st_ino == b->st_ino;
-}
-
-static int backup_same_version(const struct stat *a, const struct stat *b) {
-    if (!backup_same_identity(a, b) || a->st_size != b->st_size || !S_ISREG(b->st_mode))
-        return 0;
-#ifdef __APPLE__
-    return a->st_mtimespec.tv_sec == b->st_mtimespec.tv_sec &&
-           a->st_mtimespec.tv_nsec == b->st_mtimespec.tv_nsec &&
-           a->st_ctimespec.tv_sec == b->st_ctimespec.tv_sec &&
-           a->st_ctimespec.tv_nsec == b->st_ctimespec.tv_nsec;
-#else
-    return a->st_mtim.tv_sec == b->st_mtim.tv_sec &&
-           a->st_mtim.tv_nsec == b->st_mtim.tv_nsec &&
-           a->st_ctim.tv_sec == b->st_ctim.tv_sec &&
-           a->st_ctim.tv_nsec == b->st_ctim.tv_nsec;
-#endif
-}
-
 static int backup_source_unchanged(const char *filename, int fd, const struct stat *before) {
     struct stat current, named;
     if (fstat(fd, &current) != 0 || stat(filename, &named) != 0) return 0;
-    if (!backup_same_version(before, &current) || !backup_same_version(before, &named)) {
+    if (!file_same_version(before, &current) || !file_same_version(before, &named)) {
         errno = EBUSY;
         return 0;
     }
@@ -60,15 +41,15 @@ static int backup_sync_parent(const char *path) {
 static int backup_existing(const char *path, const struct stat *source) {
     struct stat named, opened;
     if (lstat(path, &named) != 0) return errno == ENOENT ? 0 : -1;
-    if (!S_ISREG(named.st_mode) || backup_same_identity(source, &named)) {
+    if (!S_ISREG(named.st_mode) || file_same_inode(source, &named)) {
         errno = EINVAL;
         return -1;
     }
     int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
     if (fd < 0) return -1;
     int success = fstat(fd, &opened) == 0;
-    if (success && (!S_ISREG(opened.st_mode) || !backup_same_identity(&named, &opened) ||
-                    backup_same_identity(source, &opened))) {
+    if (success && (!S_ISREG(opened.st_mode) || !file_same_inode(&named, &opened) ||
+                    file_same_inode(source, &opened))) {
         errno = EINVAL;
         success = 0;
     }
@@ -146,40 +127,28 @@ int file_backup_ensure(const char *filename, int source_fd) {
     if (!S_ISREG(source.st_mode) || source.st_size < 0) { errno = EINVAL; return 0; }
     if (!backup_source_unchanged(filename, source_fd, &source)) return 0;
     size_t length = strlen(filename);
-    if (length > SIZE_MAX - 32) { errno = ENAMETOOLONG; return 0; }
+    if (length > SIZE_MAX - sizeof(".backup.tmp.XXXXXX")) { errno = ENAMETOOLONG; return 0; }
+    int success = 0, error;
+    char *temporary = NULL;
     char *path = malloc(length + sizeof(".backup"));
-    char *temporary = malloc(length + sizeof(".backup.tmp.XXXXXX"));
-    if (!path || !temporary) {
-        free(path);
-        free(temporary);
-        errno = ENOMEM;
-        return 0;
-    }
+    if (!path) return 0;
     memcpy(path, filename, length);
     memcpy(path + length, ".backup", sizeof(".backup"));
-    memcpy(temporary, filename, length);
-    memcpy(temporary + length, ".backup.tmp.XXXXXX", sizeof(".backup.tmp.XXXXXX"));
     int existing = backup_existing(path, &source);
     if (existing) {
-        int success = existing > 0 && backup_sync_parent(path);
-        int error = errno;
-        free(path);
-        free(temporary);
-        errno = error;
-        return success;
+        success = existing > 0 && backup_sync_parent(path);
+        goto cleanup;
     }
+    temporary = malloc(length + sizeof(".backup.tmp.XXXXXX"));
+    if (!temporary) goto cleanup;
+    memcpy(temporary, filename, length);
+    memcpy(temporary + length, ".backup.tmp.XXXXXX", sizeof(".backup.tmp.XXXXXX"));
     int target = mkstemp(temporary);
-    if (target < 0) {
-        int error = errno;
-        free(path);
-        free(temporary);
-        errno = error;
-        return 0;
-    }
+    if (target < 0) goto cleanup;
     (void)fcntl(target, F_SETFD, FD_CLOEXEC);
     off_t original_position = lseek(source_fd, 0, SEEK_CUR);
-    int success = ftruncate(target, source.st_size) == 0 &&
-                  backup_copy(source_fd, target, source.st_size);
+    success = ftruncate(target, source.st_size) == 0 &&
+              backup_copy(source_fd, target, source.st_size);
     if (success) {
         int result;
         do { result = fsync(target); } while (result < 0 && errno == EINTR);
@@ -188,7 +157,7 @@ int file_backup_ensure(const char *filename, int source_fd) {
     if (success && link(temporary, path) != 0) {
         success = errno == EEXIST && backup_existing(path, &source) > 0;
     }
-    int error = errno;
+    error = errno;
     if (original_position >= 0) (void)lseek(source_fd, original_position, SEEK_SET);
     close(target);
     unlink(temporary);
@@ -196,6 +165,9 @@ int file_backup_ensure(const char *filename, int source_fd) {
         success = 0;
         error = errno;
     }
+    errno = error;
+cleanup:
+    error = errno;
     free(path);
     free(temporary);
     errno = error;

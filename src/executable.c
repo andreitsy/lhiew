@@ -2,6 +2,7 @@
 #include "lhiew/executable.h"
 #include "executable_internal.h"
 
+#include <stdarg.h>
 #include <string.h>
 
 int exe_error(executableInfo *info, executableStatus status, const char *message) {
@@ -11,7 +12,7 @@ int exe_error(executableInfo *info, executableStatus status, const char *message
 }
 
 executableRow *exe_add(executableInfo *info, executableRowKind kind,
-                       size_t offset, size_t length, const char *label) {
+                       size_t offset, size_t length, const char *format, ...) {
     if (info->count == 100000) {
         exe_error(info, EXE_LIMIT, "Executable browser row limit reached (100000)");
         return NULL;
@@ -32,7 +33,10 @@ executableRow *exe_add(executableInfo *info, executableRowKind kind,
     row->offset = offset;
     row->length = length;
     row->name_offset = row->ordinal_offset = row->mirror_offset = SIZE_MAX;
-    snprintf(row->label, sizeof(row->label), "%s", label);
+    va_list args;
+    va_start(args, format);
+    vsnprintf(row->label, sizeof(row->label), format, args);
+    va_end(args);
     return row;
 }
 
@@ -44,7 +48,7 @@ int exe_name(const uint8_t *data, size_t size, size_t offset, size_t end,
     if (pascal) {
         len = data[offset];
         start++;
-        if (!exe_span(end, start, len)) return 0;
+        if (!byte_span(end, start, len)) return 0;
         if (memchr(data + start, 0, len)) return 0;
     } else {
         len = 0;
@@ -81,17 +85,17 @@ void executable_parse(const uint8_t *data, size_t size, executableInfo *info) {
             exe_error(info, EXE_MALFORMED, "Truncated DOS header");
             return;
         }
-        header = exe_u32(data + 60);
-        if (header < 64 || !exe_span(size, header, 2)) {
+        header = read_le32(data + 60);
+        if (header < 64 || !byte_span(size, header, 2)) {
             exe_error(info, EXE_UNSUPPORTED, "No PE/NE/LE/LX header in DOS file");
             return;
         }
     }
-    if (exe_span(size, header, 4) && !memcmp(data + header, "PE\0\0", 4)) {
+    if (byte_span(size, header, 4) && !memcmp(data + header, "PE\0\0", 4)) {
         exe_parse_pe(data, size, header, info);
-    } else if (exe_span(size, header, 2) && !memcmp(data + header, "NE", 2)) {
+    } else if (byte_span(size, header, 2) && !memcmp(data + header, "NE", 2)) {
         exe_parse_ne(data, size, header, info);
-    } else if (exe_span(size, header, 2) &&
+    } else if (byte_span(size, header, 2) &&
                (!memcmp(data + header, "LE", 2) || !memcmp(data + header, "LX", 2))) {
         exe_parse_linear(data, size, header, info);
     } else {

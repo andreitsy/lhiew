@@ -423,6 +423,49 @@ static void test_thumb_it_context_survives_centering_and_redraw(void) {
     assert_sequence(0x100, conditional, 4);
 }
 
+static void test_profile_bounds_and_auto_label(void) {
+    open_fixture("elf_aarch64.bin");
+    ASSERT_EQ(architecture_current_profile(), (size_t)0);
+    ASSERT_STR_EQ(architecture_current_name(), "AArch64");
+    ASSERT_EQ(architecture_profile(architecture_profile_count()), NULL);
+    ASSERT_EQ(architecture_profile(SIZE_MAX), NULL);
+
+    global_cfg.cur_byte = 0x104;
+    architecture_select(SIZE_MAX);
+    ASSERT_EQ(global_cfg.cur_byte, (size_t)0x104);
+    ASSERT_EQ(global_cfg.architecture, ARCH_AARCH64);
+    ASSERT_EQ(architecture_current_profile(), (size_t)0);
+
+    for (size_t index = 1; index < architecture_profile_count(); ++index) {
+        architecture_select(index);
+        ASSERT_EQ(architecture_current_profile(), index);
+        ASSERT_STR_EQ(architecture_current_name(), architecture_profile(index)->name);
+        ASSERT_EQ(global_cfg.cur_byte, (size_t)0x104);
+    }
+}
+
+static void test_detection_cache_requires_same_mapping_and_size(void) {
+    open_fixture("elf_aarch64.bin");
+    ASSERT_NE(architecture_binary_info(), NULL);
+    size_t size = global_cfg.num_bytes;
+    global_cfg.num_bytes--;
+    ASSERT_EQ(architecture_binary_info(), NULL);
+    binaryRegion region;
+    ASSERT_EQ(architecture_region(0x100, &region), 0);
+    global_cfg.num_bytes = size;
+
+    uint8_t *mapping = global_cfg.file;
+    uint8_t different_file[] = {0x90};
+    global_cfg.file = different_file;
+    ASSERT_EQ(architecture_binary_info(), NULL);
+    architecture_jump_to_entry();
+    ASSERT_EQ(global_cfg.cur_byte, (size_t)0);
+    global_cfg.file = mapping;
+    ASSERT_NE(architecture_binary_info(), NULL);
+    global_cfg.binary_detected = 0;
+    ASSERT_EQ(architecture_binary_info(), NULL);
+}
+
 int main(void) {
     printf("test_architectures:\n");
     for (size_t i = 0; i < sizeof(header_cases) / sizeof(header_cases[0]); ++i) {
@@ -445,6 +488,8 @@ int main(void) {
     RUN_TEST(test_unknown_and_malformed_headers_remain_inspectable);
     RUN_TEST(test_variable_width_navigation_and_resize);
     RUN_TEST(test_thumb_it_context_survives_centering_and_redraw);
+    RUN_TEST(test_profile_bounds_and_auto_label);
+    RUN_TEST(test_detection_cache_requires_same_mapping_and_size);
     cleanup_fixture();
     TEST_REPORT();
 }

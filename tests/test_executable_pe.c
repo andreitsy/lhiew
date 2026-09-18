@@ -124,9 +124,12 @@ static void test_pe_reparse_changed_name_and_mirrored_ordinal(void) {
         memcpy(data + FUNCTION + 2, "ExitThreads", 11);
         executable_parse(data, sizeof(data), &info);
         ASSERT_EQ(info.status, EXE_OK);
-        ASSERT_STR_EQ(find_row(&info, EXE_IMPORT, 0)->label, "KERNEL32.dll!ExitThreads");
-        ASSERT_STR_EQ(find_row(&info, EXE_IMPORT, 1)->label, "KERNEL32.dll!#456");
-        ASSERT(find_row(&info, EXE_IMPORT, 1)->editable);
+        executableRow *named = find_row(&info, EXE_IMPORT, 0);
+        ordinal = find_row(&info, EXE_IMPORT, 1);
+        ASSERT(named && ordinal);
+        ASSERT_STR_EQ(named->label, "KERNEL32.dll!ExitThreads");
+        ASSERT_STR_EQ(ordinal->label, "KERNEL32.dll!#456");
+        ASSERT(ordinal->editable);
         executable_free(&info);
     }
 }
@@ -158,13 +161,17 @@ static void test_pe_bound_imports_are_read_only(void) {
     executableInfo info = {0};
     executable_parse(data, sizeof(data), &info);
     ASSERT_EQ(info.status, EXE_OK);
-    ASSERT(!find_row(&info, EXE_MODULE, 0)->editable);
-    ASSERT(!find_row(&info, EXE_IMPORT, 0)->editable);
-    ASSERT(!find_row(&info, EXE_IMPORT, 1)->editable);
+    executableRow *module = find_row(&info, EXE_MODULE, 0);
+    executableRow *named = find_row(&info, EXE_IMPORT, 0);
+    executableRow *ordinal = find_row(&info, EXE_IMPORT, 1);
+    ASSERT(module && named && ordinal);
+    ASSERT(!module->editable && !named->editable && !ordinal->editable);
     put32(data + RAW, 0);
     executable_parse(data, sizeof(data), &info);
     ASSERT_EQ(info.status, EXE_OK);
-    ASSERT(!find_row(&info, EXE_MODULE, 0)->editable);
+    module = find_row(&info, EXE_MODULE, 0);
+    ASSERT_NE(module, NULL);
+    ASSERT(!module->editable);
     ASSERT(!find_row(&info, EXE_IMPORT, 0));
     ASSERT(strstr(info.message, "Bound"));
     executable_free(&info);
@@ -179,9 +186,11 @@ static void test_pe_bound_directory_disables_edits(void) {
     executableInfo info = {0};
     executable_parse(data, sizeof(data), &info);
     ASSERT_EQ(info.status, EXE_OK);
-    ASSERT(!find_row(&info, EXE_MODULE, 0)->editable);
-    ASSERT(!find_row(&info, EXE_IMPORT, 0)->editable);
-    ASSERT(!find_row(&info, EXE_IMPORT, 1)->editable);
+    executableRow *module = find_row(&info, EXE_MODULE, 0);
+    executableRow *named = find_row(&info, EXE_IMPORT, 0);
+    executableRow *ordinal = find_row(&info, EXE_IMPORT, 1);
+    ASSERT(module && named && ordinal);
+    ASSERT(!module->editable && !named->editable && !ordinal->editable);
     executable_free(&info);
 }
 
@@ -192,7 +201,9 @@ static void test_pe_mismatched_iat_is_read_only(void) {
     executableInfo info = {0};
     executable_parse(data, sizeof(data), &info);
     ASSERT_EQ(info.status, EXE_OK);
-    ASSERT(!find_row(&info, EXE_IMPORT, 1)->editable);
+    executableRow *ordinal = find_row(&info, EXE_IMPORT, 1);
+    ASSERT_NE(ordinal, NULL);
+    ASSERT(!ordinal->editable);
     executable_free(&info);
 }
 
@@ -209,10 +220,12 @@ static void test_pe_header_rvas(void) {
     executableInfo info = {0};
     executable_parse(data, sizeof(data), &info);
     ASSERT_EQ(info.status, EXE_OK);
-    ASSERT_EQ(find_row(&info, EXE_MODULE, 0)->name_offset, (size_t)0x1d0);
-    ASSERT_EQ(find_row(&info, EXE_IMPORT, 0)->name_offset, (size_t)0x1e2);
-    ASSERT(find_row(&info, EXE_MODULE, 0)->editable);
-    ASSERT(find_row(&info, EXE_IMPORT, 0)->editable);
+    executableRow *module = find_row(&info, EXE_MODULE, 0);
+    executableRow *named = find_row(&info, EXE_IMPORT, 0);
+    ASSERT(module && named);
+    ASSERT_EQ(module->name_offset, (size_t)0x1d0);
+    ASSERT_EQ(named->name_offset, (size_t)0x1e2);
+    ASSERT(module->editable && named->editable);
     executable_free(&info);
 }
 
@@ -329,6 +342,67 @@ static void test_pe_rejects_ambiguous_rvas(void) {
     }
 }
 
+static void test_pe_unsorted_adjacent_and_empty_sections(void) {
+    for (int wide = 0; wide <= 1; ++wide) {
+        uint8_t data[2048], first[40];
+        make_pe(data, wide);
+        size_t sections = sections_offset(wide);
+        put16(data + HEADER + 6, 3);
+        memcpy(data + sections + 40, data + sections, 40);
+        put32(data + sections + 8, 0x100);
+        put32(data + sections + 16, 0x100);
+        memcpy(data + sections + 40, ".names", 7);
+        put32(data + sections + 48, 0x300);
+        put32(data + sections + 52, 0x1100);
+        put32(data + sections + 56, 0x300);
+        put32(data + sections + 60, MODULE);
+        /* An empty region at the same RVA must not hide the mapped region. */
+        put32(data + sections + 92, 0x1100);
+        memcpy(first, data + sections, 40);
+        memcpy(data + sections, data + sections + 40, 40);
+        memcpy(data + sections + 40, first, 40);
+
+        executableInfo info = {0};
+        executable_parse(data, sizeof(data), &info);
+        ASSERT_EQ(info.status, EXE_OK);
+        executableRow *names = find_row(&info, EXE_REGION, 0);
+        executableRow *imports = find_row(&info, EXE_REGION, 1);
+        executableRow *module = find_row(&info, EXE_MODULE, 0);
+        executableRow *named = find_row(&info, EXE_IMPORT, 0);
+        executableRow *ordinal = find_row(&info, EXE_IMPORT, 1);
+        ASSERT(names && imports && module && named && ordinal);
+        ASSERT_EQ(names->offset, (size_t)MODULE);
+        ASSERT_EQ(imports->offset, (size_t)RAW);
+        ASSERT_EQ(module->name_offset, (size_t)MODULE);
+        ASSERT_EQ(named->name_offset, (size_t)FUNCTION + 2);
+        ASSERT(ordinal->editable);
+
+        /* A missing boundary byte or a directory crossing sections is invalid. */
+        put32(data + sections + 12, 0x1101);
+        executable_parse(data, sizeof(data), &info);
+        ASSERT_EQ(info.status, EXE_MALFORMED);
+        put32(data + sections + 12, 0x1100);
+        put32(data + directories_offset(wide) + 12, 0x101);
+        executable_parse(data, sizeof(data), &info);
+        ASSERT_EQ(info.status, EXE_MALFORMED);
+        executable_free(&info);
+    }
+}
+
+static void test_pe_rva_end_at_uint32_limit(void) {
+    uint8_t data[2048];
+    make_pe(data, 0);
+    add_overlapping_section(data, UINT32_MAX - 15, 16);
+    executableInfo info = {0};
+    executable_parse(data, sizeof(data), &info);
+    ASSERT_EQ(info.status, EXE_OK);
+    add_overlapping_section(data, UINT32_MAX - 15, 17);
+    executable_parse(data, sizeof(data), &info);
+    ASSERT_EQ(info.status, EXE_MALFORMED);
+    for (size_t i = 0; i < info.count; ++i) ASSERT(!info.rows[i].editable);
+    executable_free(&info);
+}
+
 static void test_pe_delay_import_directory_is_explicit(void) {
     uint8_t data[2048];
     make_pe(data, 0);
@@ -373,7 +447,9 @@ static void test_pe_metadata_aliases_are_read_only(void) {
     executableInfo info = {0};
     executable_parse(data, sizeof(data), &info);
     ASSERT_EQ(info.status, EXE_OK);
-    ASSERT(!find_row(&info, EXE_IMPORT, 0)->editable);
+    executableRow *import = find_row(&info, EXE_IMPORT, 0);
+    ASSERT_NE(import, NULL);
+    ASSERT(!import->editable);
     make_pe(data, 0);
     /* Ordinal encoding can itself inhabit the DOS header. */
     put32(data + RAW, 0x20);
@@ -382,7 +458,9 @@ static void test_pe_metadata_aliases_are_read_only(void) {
     put32(data + IAT + 4, 0);
     executable_parse(data, sizeof(data), &info);
     ASSERT_EQ(info.status, EXE_OK);
-    ASSERT(!find_row(&info, EXE_IMPORT, 0)->editable);
+    import = find_row(&info, EXE_IMPORT, 0);
+    ASSERT_NE(import, NULL);
+    ASSERT(!import->editable);
     make_pe(data, 0);
     /* An otherwise normal ordinal's mirrored IAT cannot overwrite DOS. */
     put32(data + RAW + 16, 0x20);
@@ -391,7 +469,9 @@ static void test_pe_metadata_aliases_are_read_only(void) {
     put32(data + 0x20, 0x8000007b);
     executable_parse(data, sizeof(data), &info);
     ASSERT_EQ(info.status, EXE_OK);
-    ASSERT(!find_row(&info, EXE_IMPORT, 0)->editable);
+    import = find_row(&info, EXE_IMPORT, 0);
+    ASSERT_NE(import, NULL);
+    ASSERT(!import->editable);
     executable_free(&info);
 }
 
@@ -422,10 +502,12 @@ static void test_pe_shared_bound_fields_stay_read_only(void) {
     executableInfo info = {0};
     executable_parse(data, sizeof(data), &info);
     ASSERT_EQ(info.status, EXE_OK);
-    ASSERT(!find_row(&info, EXE_MODULE, 0)->editable);
-    ASSERT(!find_row(&info, EXE_IMPORT, 0)->editable);
-    ASSERT(!find_row(&info, EXE_IMPORT, 1)->editable);
-    ASSERT(!find_row(&info, EXE_MODULE, 1)->editable);
+    executableRow *module = find_row(&info, EXE_MODULE, 0);
+    executableRow *named = find_row(&info, EXE_IMPORT, 0);
+    executableRow *ordinal = find_row(&info, EXE_IMPORT, 1);
+    executableRow *bound = find_row(&info, EXE_MODULE, 1);
+    ASSERT(module && named && ordinal && bound);
+    ASSERT(!module->editable && !named->editable && !ordinal->editable && !bound->editable);
     executable_free(&info);
 }
 
@@ -442,6 +524,8 @@ int main(void) {
     RUN_TEST(test_pe_rejects_invalid_thunks);
     RUN_TEST(test_pe_rejects_truncated_strings_and_sections);
     RUN_TEST(test_pe_rejects_ambiguous_rvas);
+    RUN_TEST(test_pe_unsorted_adjacent_and_empty_sections);
+    RUN_TEST(test_pe_rva_end_at_uint32_limit);
     RUN_TEST(test_pe_delay_import_directory_is_explicit);
     RUN_TEST(test_pe_metadata_aliases_are_read_only);
     RUN_TEST(test_pe_rejects_invalid_auxiliary_directories);

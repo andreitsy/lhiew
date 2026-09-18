@@ -123,6 +123,25 @@ static void test_elf_machine_modes(void) {
     ASSERT_EQ(info.architecture.id, ARCH_UNKNOWN);
 }
 
+static void test_elf_unaligned_headers(void) {
+    uint8_t storage[513];
+    uint8_t *data = storage + 1;
+    for (int wide = 0; wide <= 1; ++wide) {
+        for (int be = 0; be <= 1; ++be) {
+            make_elf(data, wide, be, wide ? 21 : 20);
+            binaryInfo info;
+            binaryRegion region;
+            binary_detect(data, 512, &info);
+            ASSERT_EQ(info.status, BINARY_DETECTED);
+            ASSERT_EQ(info.entry_offset, (size_t)260);
+            ASSERT(binary_region_at(data, 512, &info, 260, &region));
+            ASSERT_EQ(region.address, UINT64_C(0x401000));
+            ASSERT_EQ(region.offset, (size_t)256);
+            ASSERT_EQ(region.size, (size_t)16);
+        }
+    }
+}
+
 static void test_elf_relocatable_sections_and_extended_counts(void) {
     uint8_t data[512];
     binaryInfo info;
@@ -634,6 +653,7 @@ static void test_nlm_malformed_and_unsupported_headers(void) {
 int main(void) {
     RUN_TEST(test_elf_architectures_and_addresses);
     RUN_TEST(test_elf_machine_modes);
+    RUN_TEST(test_elf_unaligned_headers);
     RUN_TEST(test_elf_relocatable_sections_and_extended_counts);
     RUN_TEST(test_elf_rejects_overflow_and_invalid_extents);
     RUN_TEST(test_pe_sections_modes_and_bounds);

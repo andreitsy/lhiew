@@ -1,5 +1,5 @@
-#include "test_harness.h"
 #include "lhiew/types.h"
+#include "test_harness.h"
 
 static void test_editor_mode_values(void) {
     ASSERT_EQ(TEXT_MODE, 0);
@@ -15,7 +15,6 @@ static void test_disassembler_mode_values(void) {
 }
 
 static void test_constants(void) {
-    ASSERT_EQ(HEX_BYTE_LENGTH, 16);
     ASSERT_EQ(DISASSEMBLED_BUFFER_SIZE, 128);
     ASSERT_EQ(SCREENCOLS_MIN, 24);
     ASSERT_EQ(SCREENROWS_MIN, 5);

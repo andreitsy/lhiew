@@ -1,4 +1,5 @@
 #include "lhiew/types.h"
+#include "file_state.h"
 #include "lhiew/hex_edit.h"
 #include "lhiew/architecture.h"
 #include "lhiew/editor.h"
@@ -49,27 +50,6 @@ static size_t change_capacity;
 static int edit_fd = -1;
 static struct stat baseline;
 
-static int same_identity(const struct stat *a, const struct stat *b) {
-    return a->st_dev == b->st_dev && a->st_ino == b->st_ino &&
-           a->st_size == b->st_size && S_ISREG(b->st_mode);
-}
-
-static int same_version(const struct stat *a, const struct stat *b) {
-#ifdef __APPLE__
-    return same_identity(a, b) &&
-           a->st_mtimespec.tv_sec == b->st_mtimespec.tv_sec &&
-           a->st_mtimespec.tv_nsec == b->st_mtimespec.tv_nsec &&
-           a->st_ctimespec.tv_sec == b->st_ctimespec.tv_sec &&
-           a->st_ctimespec.tv_nsec == b->st_ctimespec.tv_nsec;
-#else
-    return same_identity(a, b) &&
-           a->st_mtim.tv_sec == b->st_mtim.tv_sec &&
-           a->st_mtim.tv_nsec == b->st_mtim.tv_nsec &&
-           a->st_ctim.tv_sec == b->st_ctim.tv_sec &&
-           a->st_ctim.tv_nsec == b->st_ctim.tv_nsec;
-#endif
-}
-
 static int validate_file(void) {
     struct stat current, named;
     if (edit_fd < 0 || !global_cfg.filename ||
@@ -77,7 +57,7 @@ static int validate_file(void) {
         editor_set_status_message("Cannot access edited file: %s", strerror(errno));
         return 0;
     }
-    if (!same_version(&baseline, &current) || !same_identity(&current, &named)) {
+    if (!file_same_version(&baseline, &current) || !file_same_extent(&current, &named)) {
         editor_set_status_message("File changed externally; discard edits and reopen");
         return 0;
     }
@@ -130,7 +110,7 @@ int hex_edit_begin(void) {
         editor_set_status_message("Cannot edit file: %s", strerror(errno));
         return 0;
     }
-    if (fstat(fd, &opened) != 0 || !same_version(&viewed, &opened)) {
+    if (fstat(fd, &opened) != 0 || !file_same_version(&viewed, &opened)) {
         close(fd);
         editor_set_status_message("File changed; reopen before editing");
         return 0;
@@ -143,7 +123,7 @@ int hex_edit_begin(void) {
     }
     struct stat after_backup, named;
     if (fstat(fd, &after_backup) != 0 || stat(global_cfg.filename, &named) != 0 ||
-        !same_version(&opened, &after_backup) || !same_identity(&after_backup, &named)) {
+        !file_same_version(&opened, &after_backup) || !file_same_extent(&after_backup, &named)) {
         close(fd);
         editor_set_status_message("File changed during backup; reopen before editing");
         return 0;
@@ -175,6 +155,27 @@ static size_t find_change(size_t offset) {
     return first;
 }
 
+static int reserve_changes(size_t needed) {
+    if (needed <= change_capacity)
+        return 1;
+    size_t limit = SIZE_MAX / sizeof(*changes);
+    if (needed > limit) {
+        editor_set_status_message("Too many pending edits");
+        return 0;
+    }
+    size_t capacity = change_capacity ? change_capacity : 64;
+    while (capacity < needed)
+        capacity = capacity > limit / 2 ? limit : capacity * 2;
+    byteChange *replacement = HEX_REALLOC(changes, capacity * sizeof(*changes));
+    if (!replacement) {
+        editor_set_status_message("Not enough memory for pending edits");
+        return 0;
+    }
+    changes = replacement;
+    change_capacity = capacity;
+    return 1;
+}
+
 static int stage_byte(size_t offset, uint8_t value) {
     size_t index = find_change(offset);
     if (index < change_count && changes[index].offset == offset) {
@@ -190,20 +191,8 @@ static int stage_byte(size_t offset, uint8_t value) {
     uint8_t before = global_cfg.file[offset];
     if (before == value)
         return 1;
-    if (change_count == change_capacity) {
-        size_t capacity = change_capacity ? change_capacity * 2 : 64;
-        if (capacity < change_capacity || capacity > SIZE_MAX / sizeof(*changes)) {
-            editor_set_status_message("Too many pending edits");
-            return 0;
-        }
-        byteChange *replacement = HEX_REALLOC(changes, capacity * sizeof(*changes));
-        if (!replacement) {
-            editor_set_status_message("Not enough memory for this edit");
-            return 0;
-        }
-        changes = replacement;
-        change_capacity = capacity;
-    }
+    if (!reserve_changes(change_count + 1))
+        return 0;
     memmove(changes + index + 1, changes + index,
             (change_count - index) * sizeof(*changes));
     changes[index] = (byteChange){offset, before, value, 0};
@@ -227,30 +216,23 @@ int hex_edit_set_byte(size_t offset, uint8_t value) {
 
 int hex_edit_patch(const hexPatch *patches, size_t count) {
     if (!global_cfg.editing || edit_fd < 0 || !validate_file()) return 0;
+    if (count && !patches) {
+        editor_set_status_message("Missing edit spans");
+        return 0;
+    }
     size_t reserve = change_count;
     for (size_t i = 0; i < count; ++i) {
         const hexPatch *patch = &patches[i];
-        if (!patch->bytes || patch->offset > global_cfg.num_bytes ||
+        if ((!patch->bytes && patch->length) || patch->offset > global_cfg.num_bytes ||
             patch->length > global_cfg.num_bytes - patch->offset ||
             patch->length > SIZE_MAX - reserve) {
-            editor_set_status_message("Invalid import edit span");
+            editor_set_status_message("Invalid edit span");
             return 0;
         }
         reserve += patch->length;
     }
-    if (reserve > change_capacity) {
-        if (reserve > SIZE_MAX / sizeof(*changes)) {
-            editor_set_status_message("Too many pending edits");
-            return 0;
-        }
-        byteChange *replacement = HEX_REALLOC(changes, reserve * sizeof(*changes));
-        if (!replacement) {
-            editor_set_status_message("Not enough memory for the complete edit");
-            return 0;
-        }
-        changes = replacement;
-        change_capacity = reserve;
-    }
+    if (!reserve_changes(reserve))
+        return 0;
     /* All bounds and allocations precede mutation. stage_byte cannot allocate
        or fail once the worst-case number of records has been reserved. */
     for (size_t i = 0; i < count; ++i) {
@@ -265,7 +247,7 @@ static int save_error(int error) {
        before value now records the bytes our writes actually put on disk, so a
        retry can validate them. Reloading cannot roll back these disk writes. */
     struct stat current;
-    if (fstat(edit_fd, &current) == 0 && same_identity(&baseline, &current))
+    if (fstat(edit_fd, &current) == 0 && file_same_extent(&baseline, &current))
         baseline = current;
     editor_set_status_message("Save failed: %s; disk may be partly written", strerror(error));
     return 0;
@@ -324,7 +306,7 @@ int hex_edit_save(void) {
     struct stat current;
     if (fstat(edit_fd, &current) != 0)
         return save_error(errno);
-    if (!same_identity(&baseline, &current)) {
+    if (!file_same_extent(&baseline, &current)) {
         editor_set_status_message("File changed during save; pending edits retained");
         return 0;
     }

@@ -90,9 +90,7 @@ void architecture_detect_file(void) {
     }
 }
 
-size_t architecture_current_profile(void) {
-    if (!global_cfg.architecture_manual)
-        return 0;
+static size_t matching_profile(void) {
     for (size_t index = 1; index < architecture_profile_count(); ++index) {
         const architectureSpec *spec = &profiles[index].spec;
         if (spec->id == global_cfg.architecture &&
@@ -103,15 +101,13 @@ size_t architecture_current_profile(void) {
     return 0;
 }
 
+size_t architecture_current_profile(void) {
+    return global_cfg.architecture_manual ? matching_profile() : 0;
+}
+
 const char *architecture_current_name(void) {
-    for (size_t index = 1; index < architecture_profile_count(); ++index) {
-        const architectureSpec *spec = &profiles[index].spec;
-        if (spec->id == global_cfg.architecture &&
-            spec->big_endian == global_cfg.big_endian &&
-            (spec->id != ARCH_X86 || spec->x86_mode == global_cfg.disassembler_mode))
-            return profiles[index].name;
-    }
-    return "Unsupported";
+    size_t index = matching_profile();
+    return index ? profiles[index].name : "Unsupported";
 }
 
 const char *architecture_detection_label(void) {

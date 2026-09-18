@@ -8,14 +8,6 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 
-size_t get_row_len(void) {
-    size_t width = global_cfg.cur_screencols;
-    if (!width || global_cfg.cy > global_cfg.num_bytes / width)
-        return 0;
-    size_t remaining = global_cfg.num_bytes - global_cfg.cy * width;
-    return remaining < width ? remaining : width;
-}
-
 size_t editor_offset_width(void) {
     size_t digits = 1;
     for (size_t offset = global_cfg.num_bytes; offset >= 16; offset /= 16)
@@ -36,13 +28,15 @@ void switch_mode(void) {
     global_cfg.cur_screencols = width ? width : 1;
     if (global_cfg.cur_byte > global_cfg.num_bytes)
         global_cfg.cur_byte = global_cfg.num_bytes;
-    if (old_width && old_width != global_cfg.cur_screencols)
-        global_cfg.rowoff = global_cfg.rowoff * old_width / global_cfg.cur_screencols;
-    global_cfg.coloff = 0;
+    if (old_width && old_width != global_cfg.cur_screencols) {
+        size_t first_byte = global_cfg.rowoff > global_cfg.num_bytes / old_width
+            ? global_cfg.num_bytes : global_cfg.rowoff * old_width;
+        global_cfg.rowoff = first_byte / global_cfg.cur_screencols;
+    }
     global_cfg.cy = global_cfg.cur_byte / global_cfg.cur_screencols;
     global_cfg.cx = global_cfg.cur_byte % global_cfg.cur_screencols;
-    global_cfg.numrows = global_cfg.num_bytes
-        ? global_cfg.num_bytes / global_cfg.cur_screencols + 1 : 0;
+    size_t last_row = global_cfg.num_bytes / global_cfg.cur_screencols;
+    global_cfg.numrows = global_cfg.num_bytes ? last_row + (last_row < SIZE_MAX) : 0;
 }
 
 void editor_resize(size_t rows, size_t cols) {
@@ -85,52 +79,15 @@ int editor_update_window_size(void) {
 }
 
 void init_editor(void) {
-    global_cfg.disassembler_mode = MODE_LONG_COMPAT_32;
-    global_cfg.architecture = ARCH_X86;
-    global_cfg.big_endian = 0;
-    global_cfg.architecture_manual = 0;
-    global_cfg.architecture_menu = 0;
-    global_cfg.architecture_choice = 0;
-    global_cfg.binary_detected = 0;
-    global_cfg.editing = 0;
-    global_cfg.edit_ascii = 0;
-    global_cfg.edit_nibble = 0;
-    global_cfg.edit_exit_prompt = 0;
-    global_cfg.goto_prompt = 0;
-    global_cfg.goto_length = 0;
-    global_cfg.goto_input[0] = '\0';
-    global_cfg.executable_browser = 0;
-    global_cfg.executable_prompt = 0;
-    global_cfg.executable_imports = 1;
-    global_cfg.executable_choice = 0;
-    global_cfg.executable_input_length = 0;
-    global_cfg.executable_input[0] = '\0';
-    global_cfg.search_prompt = 0;
-    global_cfg.search_ascii = 0;
-    global_cfg.search_backward = 0;
-    global_cfg.search_input_length = 0;
-    global_cfg.search_input[0] = '\0';
-    global_cfg.search_pattern_length = 0;
-    global_cfg.mode = TEXT_MODE;
-    global_cfg.cx = 0;
-    global_cfg.cy = 0;
-    global_cfg.rx = 0;
-    global_cfg.num_bytes = 0;
-    global_cfg.cur_byte = 0;
-    global_cfg.numrows = 0;
-    global_cfg.rowoff = 0;
-    global_cfg.coloff = 0;
-    global_cfg.screenrows = 0;
-    global_cfg.screencols = 0;
-    global_cfg.terminal_rows = 0;
-    global_cfg.window_too_small = 0;
-    global_cfg.cur_screencols = 1;
-    global_cfg.disassembler_buffer = NULL;
-    global_cfg.file = NULL;
-    global_cfg.filename = NULL;
-    global_cfg.fp = NULL;
-    global_cfg.statusmsg[0] = '\0';
-    global_cfg.statusmsg_time = 0;
+    /* Raw mode was enabled before initialization; retain its restoration data. */
+    global_cfg = (editorConfig){
+        .disassembler_mode = MODE_LONG_COMPAT_32,
+        .architecture = ARCH_X86,
+        .mode = TEXT_MODE,
+        .executable_imports = 1,
+        .cur_screencols = 1,
+        .orig_termios = global_cfg.orig_termios,
+    };
 
     size_t rows, cols;
     if (get_window_size(&rows, &cols) == -1)

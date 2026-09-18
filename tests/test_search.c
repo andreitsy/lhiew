@@ -1,5 +1,6 @@
 #include "lhiew/types.h"
 #include "lhiew/search.h"
+#include "lhiew/input.h"
 
 #include "test_harness.h"
 
@@ -112,6 +113,93 @@ static void test_find_locates_single_byte_at_boundaries(void) {
     ASSERT_EQ(sizeof(sample) - 1, found);
 }
 
+static void test_compile_failure_never_exposes_partial_length(void) {
+    uint8_t pattern[SEARCH_PATTERN_MAX];
+    size_t length = 42;
+    ASSERT(!search_compile("001", 3, 0, pattern, &length));
+    ASSERT_EQ(length, (size_t)0);
+    ASSERT(!search_compile("00zz", 4, 0, pattern, &length));
+    ASSERT_EQ(length, (size_t)0);
+    ASSERT(!search_compile(NULL, 0, 0, pattern, &length));
+    ASSERT(!search_compile("00", 2, 0, NULL, &length));
+    ASSERT(!search_compile("00", 2, 0, pattern, NULL));
+}
+
+static void test_find_overlapping_matches_and_extreme_starts(void) {
+    const uint8_t data[] = "ababa";
+    const uint8_t pattern[] = "aba";
+    size_t found = SIZE_MAX;
+    ASSERT(search_find(data, 5, pattern, 3, 1, 0, &found));
+    ASSERT_EQ(found, (size_t)2);
+    ASSERT(search_find(data, 5, pattern, 3, 1, 1, &found));
+    ASSERT_EQ(found, (size_t)0);
+    ASSERT(search_find(data, 5, pattern, 3, SIZE_MAX, 1, &found));
+    ASSERT_EQ(found, (size_t)2);
+    ASSERT(!search_find(data, 5, pattern, 3, SIZE_MAX, 0, &found));
+    ASSERT_EQ(found, (size_t)2);
+    ASSERT(!search_find(data, 5, NULL, 3, 0, 0, &found));
+    ASSERT(!search_find(data, 5, pattern, 3, 0, 0, NULL));
+}
+
+static void test_failed_repeat_retains_selected_direction(void) {
+    uint8_t data[] = "ababa";
+    RESET_GLOBAL_CFG();
+    global_cfg.file = data;
+    global_cfg.num_bytes = sizeof(data) - 1;
+    global_cfg.screencols = 24;
+    memcpy(global_cfg.search_pattern, "aba", 3);
+    global_cfg.search_pattern_length = 3;
+    ASSERT(!search_repeat(1));
+    ASSERT_EQ(global_cfg.search_backward, 1);
+    ASSERT_EQ(global_cfg.cur_byte, (size_t)0);
+    ASSERT(search_repeat(0));
+    ASSERT_EQ(global_cfg.search_backward, 0);
+    ASSERT_EQ(global_cfg.cur_byte, (size_t)2);
+    ASSERT(!search_repeat(0));
+    ASSERT_EQ(global_cfg.cur_byte, (size_t)2);
+    ASSERT(search_repeat(1));
+    ASSERT_EQ(global_cfg.cur_byte, (size_t)0);
+}
+
+static void test_text_prompt_retains_and_corrects_long_hex_input(void) {
+    uint8_t data[SEARCH_PATTERN_MAX];
+    memset(data, 'a', sizeof(data));
+    RESET_GLOBAL_CFG();
+    global_cfg.file = data;
+    global_cfg.num_bytes = sizeof(data);
+    global_cfg.screencols = 24;
+    search_open_prompt();
+    for (size_t i = 0; i < 2 * SEARCH_PATTERN_MAX; ++i)
+        search_keypress('a');
+    search_keypress('\t');
+    ASSERT_EQ(global_cfg.search_ascii, 1);
+    ASSERT_EQ(global_cfg.search_input_length, (size_t)2 * SEARCH_PATTERN_MAX);
+    search_keypress('b');
+    ASSERT_EQ(global_cfg.search_input_length, (size_t)2 * SEARCH_PATTERN_MAX);
+    ASSERT_EQ(global_cfg.search_input[2 * SEARCH_PATTERN_MAX - 1], 'a');
+    search_keypress('\r');
+    ASSERT_EQ(global_cfg.search_prompt, 1);
+    ASSERT_EQ(global_cfg.search_pattern_length, (size_t)0);
+
+    /* Backspace can correct retained input even while above the text limit. */
+    for (size_t i = 0; i < SEARCH_PATTERN_MAX; ++i)
+        search_keypress(127);
+    ASSERT_EQ(global_cfg.search_input_length, (size_t)SEARCH_PATTERN_MAX);
+    ASSERT_EQ(global_cfg.search_input[SEARCH_PATTERN_MAX], '\0');
+    search_keypress('b');
+    ASSERT_EQ(global_cfg.search_input_length, (size_t)SEARCH_PATTERN_MAX);
+    search_keypress('\r');
+    ASSERT_EQ(global_cfg.search_prompt, 0);
+    ASSERT_EQ(global_cfg.search_pattern_length, sizeof(data));
+    ASSERT_EQ(memcmp(global_cfg.search_pattern, data, sizeof(data)), 0);
+
+    search_open_prompt();
+    search_keypress(CTRL_KEY('u'));
+    search_keypress(CTRL_KEY('h'));
+    ASSERT_EQ(global_cfg.search_input_length, (size_t)0);
+    ASSERT_EQ(global_cfg.search_input[0], '\0');
+}
+
 int main(void) {
     RUN_TEST(test_compile_accepts_pairs_and_separators);
     RUN_TEST(test_compile_rejects_incomplete_bytes);
@@ -122,5 +210,9 @@ int main(void) {
     RUN_TEST(test_find_backward_scans_towards_zero);
     RUN_TEST(test_find_rejects_impossible_spans);
     RUN_TEST(test_find_locates_single_byte_at_boundaries);
+    RUN_TEST(test_compile_failure_never_exposes_partial_length);
+    RUN_TEST(test_find_overlapping_matches_and_extreme_starts);
+    RUN_TEST(test_failed_repeat_retains_selected_direction);
+    RUN_TEST(test_text_prompt_retains_and_corrects_long_hex_input);
     TEST_REPORT();
 }

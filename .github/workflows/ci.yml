@@ -9,6 +9,15 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        build_type: [Debug, Release]
+        include:
+          - compiler: clang
+            build_type: Debug
+            sanitizers: ON
 
     steps:
       - uses: actions/checkout@v4
@@ -16,7 +25,11 @@ jobs:
           submodules: recursive
 
       - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug
+        run: >-
+          cmake -S . -B build
+          -DCMAKE_C_COMPILER=${{ matrix.compiler }}
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+          -DLHIEW_SANITIZERS=${{ matrix.sanitizers || 'OFF' }}
 
       - name: Build
         run: cmake --build build -j$(nproc)

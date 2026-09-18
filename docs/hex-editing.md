@@ -19,7 +19,7 @@ implemented. The [feature comparison](../FEATURES.md) records these limits.
 3. Press **F5**, enter an **absolute hexadecimal file offset**, and press
    **Enter**. `g` also opens goto while viewing, but is ordinary text in the
    ASCII editor. Goto does not accept virtual addresses or relative expressions.
-   An optional `0x` prefix is accepted; Backspace corrects the prompt and Escape
+   An optional `0x` prefix is accepted; Backspace corrects, Ctrl-U clears, and Escape
    cancels it without moving.
 4. Type two hexadecimal digits to replace a byte. The first digit changes the
    high nibble; the second changes the low nibble and advances to the next byte.
@@ -158,14 +158,19 @@ occasionally conflicting historical bindings are documented separately in
 
 [`tests/test_hex_edit.c`](../tests/test_hex_edit.c) checks storage persistence,
 discard, backup protection, failures/conflicts,
-boundary handling, and overwrites in a sparse file beyond 4 GiB. Terminal tests
+boundary handling, invalid/overlapping patch groups, and overwrites in a sparse
+file beyond 4 GiB. [`tests/test_file_buffer.c`](../tests/test_file_buffer.c) checks
+transactional reloads, file growth/truncation, and reopening an owned pathname. Terminal tests
 in [`tests/test_hex_editor.py`](../tests/test_hex_editor.py) exercise the visible
 open → goto → edit → save → leave/reopen workflow, both
 input panes, unsaved-change prompts, navigation, read-only failures, and resize.
 [`tests/test_file_backup.c`](../tests/test_file_backup.c) checks original-byte
 preservation, retained existing backups, rejected aliases, failed-copy cleanup,
 and sparse backups beyond 4 GiB.
-Run the repository's full suite with:
+Identity/version comparisons are shared between editing and backup creation;
+patch groups reserve storage before changing any byte. Run the full suite in
+Debug, optimized Release and sanitizer builds as described in
+[development and validation](development.md), or test an existing build with:
 
 ```sh
 ctest --test-dir build --output-on-failure

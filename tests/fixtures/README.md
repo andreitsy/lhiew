@@ -32,3 +32,8 @@ ctest --test-dir build -R '^binary_fixtures$' --output-on-failure
 The C expectations are maintained independently from the generator. They check
 instruction lengths, register/immediate operands, EOF clearing, short viewports,
 and decoding after opening each file through `open_file_to_view()`.
+
+Run fixture checks in both Debug and optimized Release builds;
+[development.md](../../docs/development.md#build-and-test) also gives the sanitizer
+configuration. The shared endian readers never cast serialized headers to C
+structures, so unaligned data remains valid on all supported build hosts.

@@ -14,14 +14,9 @@ typedef struct linearNames {
     size_t capacity;
 } linearNames;
 
-/* All callers first validate both complete spans against the file size. */
-static int linear_overlap(size_t a, size_t a_length, size_t b, size_t b_length) {
-    return a_length && b_length && a < b + b_length && b < a + a_length;
-}
-
 static int linear_relative(size_t size, size_t header, uint32_t relative,
                             size_t *absolute) {
-    if (!relative || !exe_span(size, header, relative)) return 0;
+    if (!relative || !byte_span(size, header, relative)) return 0;
     *absolute = header + relative;
     return 1;
 }
@@ -52,9 +47,9 @@ static int linear_name_exists(const linearNames *names, size_t offset) {
 
 static int linear_take(const uint8_t *data, size_t end, size_t *cursor,
                         unsigned width, uint32_t *value) {
-    if (!exe_span(end, *cursor, width)) return 0;
-    *value = width == 1 ? data[*cursor] : width == 2 ? exe_u16(data + *cursor)
-                                                   : exe_u32(data + *cursor);
+    if (!byte_span(end, *cursor, width)) return 0;
+    *value = width == 1 ? data[*cursor] : width == 2 ? read_le16(data + *cursor)
+                                                   : read_le32(data + *cursor);
     *cursor += width;
     return 1;
 }
@@ -62,29 +57,27 @@ static int linear_take(const uint8_t *data, size_t end, size_t *cursor,
 static int linear_objects(const uint8_t *data, size_t size, size_t header,
                            executableInfo *info) {
     const uint8_t *h = data + header;
-    size_t count = exe_u32(h + 0x44), pages = exe_u32(h + 0x14);
+    size_t count = read_le32(h + 0x44), pages = read_le32(h + 0x14);
     size_t table = 0, page_table = 0;
     size_t page_stride = h[1] == 'X' ? 8 : 4;
     if (count > LINEAR_WORK_LIMIT || pages > LINEAR_WORK_LIMIT)
         return exe_error(info, EXE_LIMIT, "Too many LE/LX objects or pages");
-    if ((count && (!linear_relative(size, header, exe_u32(h + 0x40), &table) ||
+    if ((count && (!linear_relative(size, header, read_le32(h + 0x40), &table) ||
                    table < header + 0xb0 || count > (size - table) / 24)) ||
-        (pages && (!linear_relative(size, header, exe_u32(h + 0x48), &page_table) ||
+        (pages && (!linear_relative(size, header, read_le32(h + 0x48), &page_table) ||
                    page_table < header + 0xb0 || pages > (size - page_table) / page_stride)))
         return exe_error(info, EXE_MALFORMED, "Invalid LE/LX object/page table");
-    if (linear_overlap(table, count * 24, page_table, pages * page_stride))
+    if (byte_overlap(table, count * 24, page_table, pages * page_stride))
         return exe_error(info, EXE_MALFORMED, "Overlapping LE/LX object/page tables");
     for (size_t i = 0; i < count; ++i) {
         size_t offset = table + i * 24;
         const uint8_t *p = data + offset;
-        uint32_t page = exe_u32(p + 12), n = exe_u32(p + 16);
+        uint32_t page = read_le32(p + 12), n = read_le32(p + 16);
         if (n && (!page || page > pages || n > pages - (page - 1)))
             return exe_error(info, EXE_MALFORMED, "Invalid LE/LX object page range");
-        char label[160];
-        snprintf(label, sizeof(label),
-                 "Object %zu: VA %08X size %08X flags %08X pages %u+%u",
-                 i + 1, exe_u32(p + 4), exe_u32(p), exe_u32(p + 8), page, n);
-        if (!exe_add(info, EXE_REGION, offset, 24, label)) return 0;
+        if (!exe_add(info, EXE_REGION, offset, 24,
+                     "Object %zu: VA %08X size %08X flags %08X pages %u+%u",
+                     i + 1, read_le32(p + 4), read_le32(p), read_le32(p + 8), page, n)) return 0;
     }
     return 1;
 }
@@ -114,26 +107,26 @@ static int linear_record(const uint8_t *data, size_t size, size_t end,
     if (flags & 4)
         if (!linear_take(data, end, cursor, flags & 0x20 ? 4 : 2, &ignored)) goto malformed;
     if (src & 0x20) {
-        if (!source || !exe_span(end, *cursor, source * 2)) goto malformed;
+        if (!source || !byte_span(end, *cursor, source * 2)) goto malformed;
         *cursor += source * 2;
     }
     if (target_type != 1 && target_type != 2) return 1;
     if (!index || index > module_count) goto malformed;
-    char module[256], procedure[256], label[576];
+    char module[256], procedure[256];
     size_t chars, length;
     if (!exe_name(data, size, modules[index - 1], fixup_end, 1,
                   module, &chars, &length)) goto malformed;
     size_t name_offset = SIZE_MAX, name_length = 0;
+    executableRow *row;
     if (target_type == 2) {
         if (procedures == SIZE_MAX || target > fixup_end - procedures ||
             !linear_name_exists(names, procedures + target) ||
             !exe_name(data, size, procedures + target, fixup_end, 1,
                       procedure, &name_offset, &name_length) || !name_length) goto malformed;
-        snprintf(label, sizeof(label), "%s!%s", module, procedure);
+        row = exe_add(info, EXE_IMPORT, record, *cursor - record, "%s!%s", module, procedure);
     } else {
-        snprintf(label, sizeof(label), "%s!#%u", module, target);
+        row = exe_add(info, EXE_IMPORT, record, *cursor - record, "%s!#%u", module, target);
     }
-    executableRow *row = exe_add(info, EXE_IMPORT, record, *cursor - record, label);
     if (!row) return 0;
     row->editable = editable;
     if (target_type == 2) {
@@ -152,42 +145,40 @@ malformed:
 
 int exe_parse_linear(const uint8_t *data, size_t size, size_t header,
                       executableInfo *info) {
-    if (!exe_span(size, header, 0xb0))
+    if (!byte_span(size, header, 0xb0))
         return exe_error(info, EXE_MALFORMED, "Truncated LE/LX header");
     const uint8_t *h = data + header;
     snprintf(info->format, sizeof(info->format), "%c%c", h[0], h[1]);
-    if (h[2] || h[3] || exe_u32(h + 4))
+    if (h[2] || h[3] || read_le32(h + 4))
         return exe_error(info, EXE_UNSUPPORTED, "Unsupported LE/LX byte order or format level");
-    char label[576];
-    snprintf(label, sizeof(label), "%c%c header: CPU %u OS %u flags %08X",
-             h[0], h[1], exe_u16(h + 8), exe_u16(h + 10), exe_u32(h + 16));
-    if (!exe_add(info, EXE_HEADER, header, 0xb0, label) ||
+    if (!exe_add(info, EXE_HEADER, header, 0xb0, "%c%c header: CPU %u OS %u flags %08X",
+                 h[0], h[1], read_le16(h + 8), read_le16(h + 10), read_le32(h + 16)) ||
         !linear_objects(data, size, header, info)) return 0;
 
-    uint32_t section_size = exe_u32(h + 0x30), count = exe_u32(h + 0x74);
-    size_t pages = exe_u32(h + 0x14);
+    uint32_t section_size = read_le32(h + 0x30), count = read_le32(h + 0x74);
+    size_t pages = read_le32(h + 0x14);
     size_t fixups = 0, records = 0, module_table = SIZE_MAX, procedures = SIZE_MAX;
-    if (!section_size && !count && !exe_u32(h + 0x68) &&
-        !exe_u32(h + 0x6c) && !exe_u32(h + 0x70) && !exe_u32(h + 0x78)) return 1;
+    if (!section_size && !count && !read_le32(h + 0x68) &&
+        !read_le32(h + 0x6c) && !read_le32(h + 0x70) && !read_le32(h + 0x78)) return 1;
     if (count > UINT16_MAX)
         return exe_error(info, EXE_LIMIT, "Too many LE/LX import modules");
-    if (!linear_relative(size, header, exe_u32(h + 0x68), &fixups) ||
-        fixups < header + 0xb0 || !exe_span(size, fixups, section_size) ||
-        !linear_relative(size, header, exe_u32(h + 0x6c), &records))
+    if (!linear_relative(size, header, read_le32(h + 0x68), &fixups) ||
+        fixups < header + 0xb0 || !byte_span(size, fixups, section_size) ||
+        !linear_relative(size, header, read_le32(h + 0x6c), &records))
         return exe_error(info, EXE_MALFORMED, "Invalid LE/LX fixup section");
     size_t fixup_end = fixups + section_size;
-    size_t object_count = exe_u32(h + 0x44);
+    size_t object_count = read_le32(h + 0x44);
     /* Import edits must never alias loader records, even when the aliased
        bytes also happen to form syntactically valid objects or page maps. */
-    if ((object_count && linear_overlap(header + exe_u32(h + 0x40), object_count * 24,
+    if ((object_count && byte_overlap(header + read_le32(h + 0x40), object_count * 24,
                                         fixups, section_size)) ||
-        (pages && linear_overlap(header + exe_u32(h + 0x48), pages * (h[1] == 'X' ? 8 : 4),
+        (pages && byte_overlap(header + read_le32(h + 0x48), pages * (h[1] == 'X' ? 8 : 4),
                                  fixups, section_size)))
         return exe_error(info, EXE_MALFORMED, "LE/LX fixup section overlaps loader tables");
-    if (exe_u32(h + 0x70) &&
-        !linear_relative(size, header, exe_u32(h + 0x70), &module_table)) goto malformed;
-    if (exe_u32(h + 0x78) &&
-        !linear_relative(size, header, exe_u32(h + 0x78), &procedures)) goto malformed;
+    if (read_le32(h + 0x70) &&
+        !linear_relative(size, header, read_le32(h + 0x70), &module_table)) goto malformed;
+    if (read_le32(h + 0x78) &&
+        !linear_relative(size, header, read_le32(h + 0x78), &procedures)) goto malformed;
     if (records < fixups || records > fixup_end || pages >= (records - fixups) / 4 ||
         (module_table != SIZE_MAX && (module_table < records || module_table > fixup_end)) ||
         (procedures != SIZE_MAX && (procedures < records || procedures > fixup_end)) ||
@@ -195,13 +186,13 @@ int exe_parse_linear(const uint8_t *data, size_t size, size_t header,
         (count && (module_table == SIZE_MAX || procedures == SIZE_MAX))) goto malformed;
     size_t record_end = module_table != SIZE_MAX ? module_table :
                         procedures != SIZE_MAX ? procedures : fixup_end;
-    if (exe_u32(data + fixups)) goto malformed;
+    if (read_le32(data + fixups)) goto malformed;
     size_t *modules = count ? malloc((size_t)count * sizeof(*modules)) : NULL;
     linearNames names = {0};
     if (count && !modules)
         return exe_error(info, EXE_LIMIT, "Cannot allocate LE/LX modules");
     int success = 0;
-    int editable = exe_u32(h + 0x34) == 0;
+    int editable = read_le32(h + 0x34) == 0;
     size_t cursor = module_table;
     for (uint32_t i = 0; i < count; ++i) {
         char name[256];
@@ -209,8 +200,8 @@ int exe_parse_linear(const uint8_t *data, size_t size, size_t header,
         if (!exe_name(data, size, cursor, procedures, 1, name, &chars, &length) || !length)
             goto malformed_names;
         modules[i] = cursor;
-        snprintf(label, sizeof(label), "Module %u: %s", i + 1, name);
-        executableRow *row = exe_add(info, EXE_MODULE, cursor, length + 1, label);
+        executableRow *row = exe_add(info, EXE_MODULE, cursor, length + 1,
+                                     "Module %u: %s", i + 1, name);
         if (!row) goto done;
         row->name_offset = chars;
         row->name_length = length;
@@ -227,15 +218,15 @@ int exe_parse_linear(const uint8_t *data, size_t size, size_t header,
                 goto done;
             }
             size_t length = data[cursor];
-            if (!exe_span(fixup_end, cursor + 1, length)) goto malformed_names;
+            if (!byte_span(fixup_end, cursor + 1, length)) goto malformed_names;
             if (!linear_name_add(&names, cursor, info)) goto done;
             cursor += length + 1;
         }
     }
     size_t work = 0;
     for (size_t page = 0; page < pages; ++page) {
-        uint32_t begin = exe_u32(data + fixups + page * 4);
-        uint32_t end = exe_u32(data + fixups + (page + 1) * 4);
+        uint32_t begin = read_le32(data + fixups + page * 4);
+        uint32_t end = read_le32(data + fixups + (page + 1) * 4);
         if (begin > end || end > record_end - records) goto malformed_names;
         cursor = records + begin;
         while (cursor < records + end) {
