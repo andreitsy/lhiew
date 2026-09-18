@@ -25,6 +25,9 @@ enum editorKey {
 };
 
 _Noreturn void die_safely(const char *s);
+/* Write all bytes to stdout, retrying short/interrupted writes. Return one on
+   success, zero with errno set on failure. An empty span may be NULL. */
+int terminal_write(const char *data, size_t length);
 void enable_raw_mode(void);
 void disable_raw_mode(void);
 int  editor_read_key(void);

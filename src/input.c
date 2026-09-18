@@ -10,7 +10,6 @@
 #include "lhiew/terminal.h"
 
 #include <stdlib.h>
-#include <unistd.h>
 
 int editor_hex_digit(int key) {
     if (key >= '0' && key <= '9') return key - '0';
@@ -244,7 +243,7 @@ static void architecture_menu_keypress(int key) {
 }
 
 static void quit_editor(void) {
-    write(STDOUT_FILENO, "\x1b[2J\x1b[H", 7);
+    (void)terminal_write("\x1b[2J\x1b[H", 7);
     exit(0);
 }
 

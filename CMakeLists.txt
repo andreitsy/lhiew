@@ -108,7 +108,7 @@ function(lhiew_add_test name)
     add_test(NAME ${name} COMMAND test_${name})
 endfunction()
 
-foreach(module append_buffer types editor file_buffer file_backup hex_edit
+foreach(module append_buffer types terminal editor file_buffer file_backup hex_edit
         render input disassembler binary_fixtures architectures binary search
         executable_pe executable_ne executable_linear executable_nlm)
     lhiew_add_test(${module})
@@ -121,6 +121,10 @@ target_compile_definitions(hex_edit_test_backend PRIVATE
     HEX_PWRITE=hex_test_pwrite HEX_FSYNC=hex_test_fsync HEX_REALLOC=hex_test_realloc
     HEX_PREAD=hex_test_pread)
 target_sources(test_hex_edit PRIVATE $<TARGET_OBJECTS:hex_edit_test_backend>)
+add_library(terminal_test_backend OBJECT src/terminal.c)
+target_link_libraries(terminal_test_backend PRIVATE lhiew_core)
+target_compile_definitions(terminal_test_backend PRIVATE TERMINAL_WRITE=terminal_test_write)
+target_sources(test_terminal PRIVATE $<TARGET_OBJECTS:terminal_test_backend>)
 target_compile_definitions(test_architectures PRIVATE
     LHIEW_ARCHITECTURE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/architecture_fixtures")
 target_compile_definitions(test_binary_fixtures PRIVATE

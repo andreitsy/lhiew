@@ -78,6 +78,10 @@ and [Clang optimization reference](https://clang.llvm.org/docs/CommandGuide/clan
 - `append_buffer` grows capacity geometrically, checks addition overflow and
   resets all fields when freed. An allocation failure leaves its prior contents
   intact. It is a byte buffer, not a NUL-terminated string.
+- `terminal_write` completes partial writes and retries interruptions. Rendering
+  handles permanent output failures, while exit-time cleanup remains best effort.
+  Fault-injection tests cover short writes, `EINTR`, zero progress and errors;
+  checking results also keeps optimized glibc builds clean under `-Werror`.
 - Architecture selection and labels share profile matching. The decoder caches
   alignment and detection metadata for each frame while still resolving mapped
   region boundaries for each instruction and retaining Thumb IT context.

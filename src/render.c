@@ -6,11 +6,12 @@
 #include "lhiew/executable_browser.h"
 #include "lhiew/hex_edit.h"
 #include "lhiew/search.h"
+#include "lhiew/terminal.h"
 
+#include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
-#include <unistd.h>
 
 static void append_spaces(append_buffer *ab, size_t count) {
     static const char spaces[] = "                                                                ";
@@ -467,8 +468,13 @@ void editor_refresh_screen(void) {
     editor_update_window_size();
     append_buffer ab = ABUF_INIT;
     editor_draw_screen(&ab);
-    write(STDOUT_FILENO, ab.buffer, ab.len);
+    int written = terminal_write(ab.buffer, ab.len);
+    int error = errno;
     free_append_buffer(&ab);
+    if (!written) {
+        errno = error;
+        die_safely("write terminal");
+    }
 }
 
 void editor_set_status_message(const char *fmt, ...) {

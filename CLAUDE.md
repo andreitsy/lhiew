@@ -166,7 +166,13 @@ progress/abort path before relaxing the pattern length or adding wildcards.
 
 ### Rendering invariant
 
-All drawing goes through `append_buffer`: code appends strings (including ANSI escapes like `\x1b[7m` for highlight), and `editor_refresh_screen` writes the buffer to stdout in one syscall, then frees it. Never call `write`/`printf` directly during a frame.
+All drawing goes through `append_buffer`: code appends strings (including ANSI
+escapes like `\x1b[7m` for highlight), and `editor_refresh_screen` sends the complete
+frame through `terminal_write`, then frees it. Output normally takes one syscall;
+the helper completes short writes and retries `EINTR`. A failed frame write exits
+through the normal terminal restoration path. Exit-time screen cleanup is best
+effort and preserves the original diagnostic. Never call `write`/`printf`
+directly during a frame.
 
 ### Include order convention
 
