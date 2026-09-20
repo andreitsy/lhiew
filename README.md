@@ -53,8 +53,8 @@ per byte; **Tab** switches between hex and printable ASCII input. Use arrows,
 Page Up/Down, Home/End, or Ctrl-Home/Ctrl-End to navigate while editing.
 
 **F9** saves changed bytes and keeps the editor open. **Escape/F10** leave editing
-in hex view; **Ctrl-Q** quits. With unsaved changes, choose **`s` save**, **`d`
-discard**, or **Escape continue**. While editing, printable keys are file input;
+in hex view; **Ctrl-Q** or **Ctrl-C** quits. With unsaved changes, choose
+**`s` save**, **`d` discard**, or **Escape continue**. While editing, printable keys are file input;
 leave the editor before using view shortcuts such as `m` or `a`.
 
 ![Hex editor with pending hexadecimal and ASCII changes](pics/hex-editor.png)
@@ -143,7 +143,7 @@ selection. Architecture selection changes decoding; it does not assemble
 instruction text. Existing instruction bytes can be patched in the hex editor.
 See the
 [architecture analysis, implementation plan and limitations](docs/architectures.md)
-and the updated [feature comparison](FEATURES.md).
+and the list of [features missing compared to Hiew](FEATURES.md).
 
 #### Tests and sample binaries
 
@@ -152,7 +152,8 @@ file loading, backups, hex/import editing and saving, executable tables,
 disassembly, rendering, cursor boundaries, and resizing. Sparse-file editing and
 backup checks exercise offsets beyond 4 GiB. When
 Python 3 is available, CTest also verifies the binary fixtures and drives the
-application through a pseudo-terminal to test live resizing and keyboard input.
+application through a pseudo-terminal to test live resizing, keyboard input and
+Ctrl-C/Ctrl-Z job control.
 The same suite runs under strict warnings, aggressive Release optimization, and
 address/undefined-behavior sanitizers; see [development and validation](docs/development.md).
 
@@ -173,6 +174,8 @@ For an automatically detected example, open
 | Key Combination    | Action                                 |
 |--------------------|----------------------------------------|
 | `Ctrl-q`           | Quit; prompt if edits are unsaved      |
+| `Ctrl-c`           | Quit, the same as `Ctrl-q`             |
+| `Ctrl-z`           | Suspend to the shell; `fg` resumes     |
 | `Ctrl-m`           | Previous view outside editing          |
 | `m`                | Next view outside editing              |
 | `F3`               | Enter hex editing from any view        |

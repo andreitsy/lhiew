@@ -107,17 +107,20 @@ class Screen:
 
 
 class Viewer:
-    def __init__(self, binary, filename, columns, rows):
+    def __init__(self, binary, filename, columns, rows, own_process_group=False):
         self.columns, self.rows = columns, rows
         self.buffer = b""
         self.latest = None
         self.master, slave = os.openpty()
         self.set_size(slave, columns, rows)
         command = [str(binary)] + ([str(filename)] if filename is not None else [])
+        # A shell gives each job its own process group; without one the group is
+        # orphaned and the kernel discards the stop signal Ctrl-Z raises.
+        group = {"preexec_fn": os.setpgrp} if own_process_group else {}
         try:
             self.process = subprocess.Popen(
                 command, stdin=slave, stdout=slave, stderr=slave,
-                env=dict(os.environ, TERM="xterm-256color"), close_fds=True,
+                env=dict(os.environ, TERM="xterm-256color"), close_fds=True, **group,
             )
         finally:
             os.close(slave)

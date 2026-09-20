@@ -123,7 +123,8 @@ target_compile_definitions(hex_edit_test_backend PRIVATE
 target_sources(test_hex_edit PRIVATE $<TARGET_OBJECTS:hex_edit_test_backend>)
 add_library(terminal_test_backend OBJECT src/terminal.c)
 target_link_libraries(terminal_test_backend PRIVATE lhiew_core)
-target_compile_definitions(terminal_test_backend PRIVATE TERMINAL_WRITE=terminal_test_write)
+target_compile_definitions(terminal_test_backend PRIVATE TERMINAL_WRITE=terminal_test_write
+    TERMINAL_TCSETATTR=terminal_test_tcsetattr)
 target_sources(test_terminal PRIVATE $<TARGET_OBJECTS:terminal_test_backend>)
 target_compile_definitions(test_architectures PRIVATE
     LHIEW_ARCHITECTURE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/architecture_fixtures")
@@ -139,7 +140,7 @@ if(UNIX)
         add_test(NAME architecture_fixture_integrity
             COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/architecture_fixtures/generate.py --check)
-        foreach(test terminal_resize hex_editor executable_browser search_ui)
+        foreach(test terminal_resize hex_editor executable_browser search_ui job_control)
             add_test(NAME ${test}
                 COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_${test}.py

@@ -242,6 +242,12 @@ static void architecture_menu_keypress(int key) {
     }
 }
 
+/* Ctrl-Z returns to the shell; a resize while stopped is picked up on resume. */
+static void suspend_editor(void) {
+    terminal_suspend();
+    editor_update_window_size();
+}
+
 static void quit_editor(void) {
     (void)terminal_write("\x1b[2J\x1b[H", 7);
     exit(0);
@@ -397,8 +403,13 @@ void editor_process_keypress(void) {
         edit_exit_keypress(c);
         return;
     }
-    if (c == CTRL_KEY('q')) {
+    /* Ctrl-C quits like Ctrl-Q, so pending edits still reach the exit prompt. */
+    if (c == CTRL_KEY('q') || c == CTRL_KEY('c')) {
         leave_editor(1);
+        return;
+    }
+    if (c == CTRL_KEY('z')) {
+        suspend_editor();
         return;
     }
     if (editor_update_window_size())

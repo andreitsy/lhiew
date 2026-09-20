@@ -30,8 +30,8 @@ implemented. The [feature comparison](../FEATURES.md) records these limits.
 6. Press **F9** to save changed bytes and keep editing. The file stays the same
    length; LHiew does not rewrite the complete file.
 7. Press **Escape** or **F10** to leave editing and remain in hex view.
-   **Ctrl-Q** quits the application. With unsaved edits, these actions offer
-   **`s` save**, **`d` discard**, or **Escape continue editing**.
+   **Ctrl-Q** or **Ctrl-C** quits the application. With unsaved edits, these
+   actions offer **`s` save**, **`d` discard**, or **Escape continue editing**.
 
 Use arrows and Page Up/Down to edit anywhere in the file, including beyond the
 current screen. **Home/End** select the first/last byte of the current row;
@@ -150,9 +150,8 @@ article is now available.
 
 The executable browser supplies a separate import-table workflow. File history,
 configuration, and calculator functions remain separate missing features. The
-article's context-dependent and
-occasionally conflicting historical bindings are documented separately in
-[FEATURES.md](../FEATURES.md#historical-additions-hiew-603).
+actions the article describes that LHiew still lacks are listed, with the rest
+of the Hiew gaps, in [FEATURES.md](../FEATURES.md).
 
 ## Verification
 

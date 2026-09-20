@@ -30,6 +30,9 @@ _Noreturn void die_safely(const char *s);
 int terminal_write(const char *data, size_t length);
 void enable_raw_mode(void);
 void disable_raw_mode(void);
+/* Restore the saved terminal settings and stop the process under job control,
+   then re-enter raw mode once the shell resumes it. The open file is retained. */
+void terminal_suspend(void);
 int  editor_read_key(void);
 int  get_cursor_position(size_t *rows, size_t *cols);
 int  get_window_size(size_t *rows, size_t *cols);

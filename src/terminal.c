@@ -4,6 +4,7 @@
 
 #include <errno.h>
 #include <limits.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,6 +16,23 @@
 #else
 ssize_t TERMINAL_WRITE(int fd, const void *buffer, size_t length);
 #endif
+
+#ifndef TERMINAL_TCSETATTR
+#define TERMINAL_TCSETATTR tcsetattr
+#else
+int TERMINAL_TCSETATTR(int fd, int actions, const struct termios *mode);
+#endif
+
+/* SIGTTOU stops a background process inside tcsetattr, and the call then fails
+   with EINTR once the job is continued. Retry instead of treating a job-control
+   stop as a fatal terminal error. */
+static int set_terminal_mode(const struct termios *mode) {
+    while (TERMINAL_TCSETATTR(STDIN_FILENO, TCSAFLUSH, mode) == -1) {
+        if (errno != EINTR)
+            return 0;
+    }
+    return 1;
+}
 
 int terminal_write(const char *data, size_t length) {
     while (length) {
@@ -44,7 +62,7 @@ _Noreturn void die_safely(const char *s) {
 }
 
 void disable_raw_mode(void) {
-    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &global_cfg.orig_termios) == -1)
+    if (!set_terminal_mode(&global_cfg.orig_termios))
         die_safely("tcsetattr");
     /* Compact/too-small views also hide the cursor. Always restore it. */
     (void)terminal_write("\x1b[m\x1b[?25h", 9);
@@ -52,10 +70,9 @@ void disable_raw_mode(void) {
         fclose(global_cfg.fp);
 }
 
-void enable_raw_mode(void) {
-    if (tcgetattr(STDIN_FILENO, &global_cfg.orig_termios) == -1)
-        die_safely("tcgetattr");
-    atexit(disable_raw_mode);
+/* ISIG stays cleared, so Ctrl-C and Ctrl-Z arrive as ordinary bytes and the
+   editor decides what they mean; see terminal_suspend and input.c. */
+static void apply_raw_mode(void) {
     struct termios raw = global_cfg.orig_termios;
     raw.c_iflag &= ~(tcflag_t)(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
     raw.c_oflag &= ~(tcflag_t)OPOST;
@@ -63,8 +80,27 @@ void enable_raw_mode(void) {
     raw.c_lflag &= ~(tcflag_t)(ECHO | ICANON | IEXTEN | ISIG);
     raw.c_cc[VMIN] = 0;
     raw.c_cc[VTIME] = 1;
-    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1)
+    if (!set_terminal_mode(&raw))
         die_safely("tcsetattr");
+}
+
+void enable_raw_mode(void) {
+    if (tcgetattr(STDIN_FILENO, &global_cfg.orig_termios) == -1)
+        die_safely("tcgetattr");
+    atexit(disable_raw_mode);
+    apply_raw_mode();
+}
+
+void terminal_suspend(void) {
+    if (!set_terminal_mode(&global_cfg.orig_termios))
+        die_safely("tcsetattr");
+    /* Hand a cooked terminal and a clean screen back to the shell. */
+    (void)terminal_write("\x1b[m\x1b[2J\x1b[H\x1b[?25h", 16);
+    /* Default SIGTSTP disposition stops the process here. A stop signal sent
+       to an orphaned process group is discarded, so this can also return at
+       once; either way the editor continues in raw mode. */
+    raise(SIGTSTP);
+    apply_raw_mode();
 }
 
 int editor_read_key(void) {
