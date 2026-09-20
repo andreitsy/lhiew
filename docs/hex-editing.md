@@ -150,9 +150,8 @@ article is now available.
 
 The executable browser supplies a separate import-table workflow. File history,
 configuration, and calculator functions remain separate missing features. The
-article's context-dependent and
-occasionally conflicting historical bindings are documented separately in
-[FEATURES.md](../FEATURES.md#historical-additions-hiew-603).
+actions the article describes that LHiew still lacks are listed, with the rest
+of the Hiew gaps, in [FEATURES.md](../FEATURES.md).
 
 ## Verification
 

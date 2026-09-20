@@ -143,7 +143,7 @@ selection. Architecture selection changes decoding; it does not assemble
 instruction text. Existing instruction bytes can be patched in the hex editor.
 See the
 [architecture analysis, implementation plan and limitations](docs/architectures.md)
-and the updated [feature comparison](FEATURES.md).
+and the list of [features missing compared to Hiew](FEATURES.md).
 
 #### Tests and sample binaries
 
