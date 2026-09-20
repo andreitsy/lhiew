@@ -3,6 +3,7 @@
 #include "test_harness.h"
 
 #include <errno.h>
+#include <termios.h>
 #include <unistd.h>
 
 typedef struct write_result {
@@ -15,8 +16,31 @@ static size_t result_count, write_calls, output_length;
 static size_t requests[8];
 static char output[64];
 
-/* Fault-injection entry point compiled into terminal_test_backend. */
+static const int *tcsetattr_errors;
+static size_t tcsetattr_error_count, tcsetattr_calls;
+
+/* Fault-injection entry points compiled into terminal_test_backend. */
 ssize_t terminal_test_write(int fd, const void *buffer, size_t size);
+int terminal_test_tcsetattr(int fd, int actions, const struct termios *mode);
+
+int terminal_test_tcsetattr(int fd, int actions, const struct termios *mode) {
+    size_t call = tcsetattr_calls++;
+    if (fd != STDIN_FILENO || actions != TCSAFLUSH || !mode) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (call < tcsetattr_error_count) {
+        errno = tcsetattr_errors[call];
+        return -1;
+    }
+    return 0;
+}
+
+static void reset_tcsetattr(const int *errors, size_t count) {
+    tcsetattr_errors = errors;
+    tcsetattr_error_count = count;
+    tcsetattr_calls = 0;
+}
 
 ssize_t terminal_test_write(int fd, const void *buffer, size_t size) {
     size_t call = write_calls++;
@@ -134,6 +158,20 @@ static void test_zero_write_fails_without_retrying(void) {
     ASSERT_EQ(memcmp(output, "ab", 2), 0);
 }
 
+/* A job-control stop interrupts tcsetattr; continuing the job must not be
+   reported as a terminal failure. */
+static void test_interrupted_mode_change_retries_until_it_applies(void) {
+    const int interruptions[] = {EINTR, EINTR};
+    reset_tcsetattr(interruptions, sizeof(interruptions) / sizeof(*interruptions));
+    const writeResult restore[] = {{9, 0}};
+    reset_writes(restore, 1);
+    global_cfg.fp = NULL;
+    disable_raw_mode();
+    ASSERT_EQ(tcsetattr_calls, (size_t)3);
+    ASSERT_EQ(output_length, (size_t)9);
+    ASSERT_EQ(memcmp(output, "\x1b[m\x1b[?25h", 9), 0);
+}
+
 int main(void) {
     printf("test_terminal:\n");
     RUN_TEST(test_empty_write_accepts_null_without_a_syscall);
@@ -142,5 +180,6 @@ int main(void) {
     RUN_TEST(test_interruptions_retry_without_skipping_or_repeating_bytes);
     RUN_TEST(test_write_errors_stop_and_preserve_errno);
     RUN_TEST(test_zero_write_fails_without_retrying);
+    RUN_TEST(test_interrupted_mode_change_retries_until_it_applies);
     TEST_REPORT();
 }

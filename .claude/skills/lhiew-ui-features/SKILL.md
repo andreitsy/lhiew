@@ -1,6 +1,6 @@
 ---
 name: lhiew-ui-features
-description: LHiew keyboard and UI feature contracts — Page Up/Down paging, F3 hex editing and nibble state, the mandatory <filename>.backup precondition, F8 executable browser prompts, F5 goto, and F7/Shift-F7/n/N search. Read before changing input.c, render.c, hex_edit.c, executable_browser.c or search.c.
+description: LHiew keyboard and UI feature contracts — Ctrl-Q/Ctrl-C quitting and Ctrl-Z job control, Page Up/Down paging, F3 hex editing and nibble state, the mandatory <filename>.backup precondition, F8 executable browser prompts, F5 goto, and F7/Shift-F7/n/N search. Read before changing input.c, terminal.c, render.c, hex_edit.c, executable_browser.c or search.c.
 ---
 
 # LHiew keyboard and UI feature contracts
@@ -9,6 +9,22 @@ State named here lives in `editorConfig` (`include/lhiew/types.h`) and is
 initialized in `init_editor()`. The canonical cursor is `global_cfg.cur_byte`;
 move it and let `switch_mode()` re-derive `cx`/`cy`. See the root `AGENTS.md`
 for that invariant and the rendering rules.
+
+## Quitting and job control (Ctrl-Q, Ctrl-C, Ctrl-Z)
+
+`ISIG` stays cleared, so Ctrl-C and Ctrl-Z arrive as the bytes `0x03` and `0x1a`
+rather than as signals; the editor decides what they mean. Ctrl-C shares the
+Ctrl-Q path, so pending edits still raise `edit_exit_prompt` instead of being
+lost, and both are dispatched ahead of view, menu, browser and editing keys but
+behind that prompt. Ctrl-Z calls `terminal_suspend`, which restores the saved
+termios settings, hands back a cleared terminal with the cursor shown, and
+raises `SIGTSTP`; an orphaned process group discards the stop, so the call may
+also return at once. On resume it re-enters raw mode with `TCSAFLUSH`, which
+discards anything typed while stopped, then re-reads the window size so a resize
+made during the stop is applied. Editing state and pending bytes survive a stop.
+Every `tcsetattr` goes through `set_terminal_mode`, which retries on `EINTR`:
+after `bg`, the background editor is stopped by `SIGTTOU` inside that call and
+the call fails once the job is continued, which must not be fatal.
 
 ## Paging
 

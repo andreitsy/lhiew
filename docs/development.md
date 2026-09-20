@@ -102,5 +102,8 @@ read, write and flush failures and exercise sparse files beyond 4 GiB.
 
 Expected fixture bytes and instruction strings remain independent of the
 decoder under test. Python integration tests drive real pseudo-terminals for
-resize, editing, import-browser and search workflows. Keep generated builds,
-temporary files and test snapshots out of commits.
+resize, editing, import-browser, search and job-control workflows.
+[`tests/test_job_control.py`](../tests/test_job_control.py) gives the viewer its
+own process group, because an orphaned group discards the stop signal Ctrl-Z
+raises. Keep generated builds, temporary files and test snapshots out of
+commits.
