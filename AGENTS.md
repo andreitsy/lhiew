@@ -6,26 +6,14 @@ LHiew is a Linux terminal binary viewer and hex editor inspired by Hiew. It view
 files in text, hex, or disassembly modes and can overwrite existing bytes. It is
 a C17 program built with CMake that uses raw-mode
 termios I/O (no curses). Zydis handles x86 with AT&T syntax; Capstone 5.0.9 handles
-the other supported CPUs. See `docs/architectures.md` for the support matrix,
-design, source specifications, and limits.
-
-Requires CMake >= 3.21 and GCC or Clang with C17 support. Linux is the target
-platform; the application depends on `termios.h`, `sys/ioctl.h` (`TIOCGWINSZ`),
-and `sys/mman.h` (`mmap`). `deps/zydis/` and `deps/capstone/` are pinned decoder
-Git submodules; `pics/` contains README screenshots.
+the other supported CPUs. Linux is the target platform. See
+`docs/architectures.md` for the support matrix, design, source specifications,
+and limits.
 
 ## Build, Test, and Development Commands
 
-Run from the repository root:
-
-```sh
-git submodule update --init --recursive  # Fetch both decoders and their dependencies
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug  # Configure
-cmake --build build --parallel          # Compile application and tests
-ctest --test-dir build --output-on-failure  # Run all tests
-ctest --test-dir build -R '^append_buffer$' --output-on-failure
-./build/lhiew /path/to/binary            # Launch in a terminal
-```
+Standard CMake/CTest from the repository root. Run
+`git submodule update --init --recursive` first; the decoder builds fail without it.
 
 Press `Ctrl-Q` or `Ctrl-C` to quit, `Ctrl-Z` to suspend to the shell. Keep
 generated build artifacts out of commits.
@@ -74,52 +62,42 @@ other fields start at zero. Initialize new state there.
 
 ### Module responsibilities
 
-- **types** (`types.h`, `types.c`) — all type definitions (`editorConfig`, `editorMode`, `disassemblerMode`, `disassemblerRow`), constants, and the `global_cfg` definition.
-- **append_buffer** (`append_buffer.h`, `append_buffer.c`) — byte buffer with geometric capacity growth and checked size arithmetic. Initialize with `ABUF_INIT`; freeing resets it for reuse. Used to assemble a screen frame before terminal output.
-- **terminal** (`terminal.h`, `terminal.c`) — termios raw-mode setup/teardown, `terminal_suspend` job-control stop and resume, escape-sequence key decoder (arrows, PgUp/PgDn, Del), window-size detection, `die_safely`.
-- **file_buffer** (`file_buffer.h`, `file_buffer.c`) — regular-file open, checked file-size conversion and read-only private `mmap` into `global_cfg.file`. Reload replaces the mapping without copying the whole file.
-- **hex_edit** (`hex_edit.h`, `hex_edit.c`) — writable reopen with file identity checks, mandatory backup before edit enable, private copy-on-write editing and a sparse sorted list of changed bytes. `hex_edit_patch` validates and reserves an entire group of field changes before staging any bytes. Saves verify file identity/version and expected original bytes, then use `pwrite` and `fsync`; failed saves retain pending records. Discard remaps the originally opened file. See `docs/hex-editing.md` for limits and failure semantics.
-- **file_backup** (`file_backup.h`, `file_backup.c`) — creates `<filename>.backup` with bounded-memory, sparse-aware copying and exclusive publication. Preserves an existing independent regular backup; source changes or backup failures prevent editing. Flushes the copy and parent directory before editing begins.
-- **executable** (`executable.h`, `executable.c`, `executable_{pe,ne,linear,nlm}.c`) — bounded PE32/PE32+, NE, LE/LX and i386 NLM v4 metadata parsers, independent of editor state. Rows expose raw file spans and validated editable name/ordinal fields; errors disable all structured edits. Initialize `executableInfo` to zero and release its rows with `executable_free`.
-- **executable_browser** (`executable_browser.h`, `executable_browser.c`) — F8/`b` header/import browser, raw-byte navigation and exact-length name/width-preserving ordinal prompts. Uses the existing hex edit transaction/save/discard path; paired PE lookup/IAT changes stage together. See `docs/executable-imports.md` for format limits.
-- **editor** (`editor.h`, `editor.c`) — initialization, resizing and `switch_mode`, which recomputes `cx`/`cy`/`numrows` from `cur_byte` with overflow-safe row arithmetic.
-- **input** (`input.h`, `input.c`) — `editor_process_keypress` dispatches keys: mode switching (`m` / `Ctrl-M`), disassembler operand-size cycling (`o`), cursor movement via `editor_move_cursor`, quit (`Ctrl-Q` or `Ctrl-C`), suspend (`Ctrl-Z`).
-- **render** (`render.h`, `render.c`) — per-mode row drawing (`draw_row_text`, `draw_row_hex`, `draw_row_disassembler`), status/message bars, scrolling, `editor_refresh_screen`.
-- **binary** (`binary.h`, `binary.c`) — bounded ELF, PE/TE, DOS MZ, thin Mach-O and i386 NLM v4 parsing. Distinguishes raw, detected, unsupported and malformed files; supplies entry/first-code offsets and file-region-to-runtime-address mappings without heap allocation. NLM uses file offsets because its load base is not encoded.
-- **search** (`search.h`, `search.c`) — byte and text pattern search over the mapping. `search_compile` turns prompt text into at most `SEARCH_PATTERN_MAX` bytes, rejecting incomplete hexadecimal pairs; `search_find` scans forward/backward without changing editor state. Forward scanning uses `memchr` to locate candidate first bytes. The prompt, repeat and status handling live in the same module and move `cur_byte` through `switch_mode()`.
-- **architecture** (`architecture.h`, `architecture.c`) — named decoder profiles, automatic detection on file read, manual overrides, profile labels, instruction alignment and entry navigation. Static detection metadata is valid only for the currently detected mapping; `binary_detected`, its pointer and size gate access.
-- **disassembler** (`disassembler.h`, `disassembler.c`) — wraps Zydis/Capstone. `disassemble_block(cur_byte)` fills `global_cfg.disassembler_buffer` with up to `screenrows` rows, centering the instruction containing `cur_byte`. A single forward decoding pass retains preceding rows in a ring, preserving Thumb IT state. Bounded lookback respects cached boundaries, known entry points, instruction alignment and mapped region ends.
+Each module is one `.h`/`.c` pair under `include/lhiew/` and `src/`; the notes
+below are the contracts the headers do not state.
+
+- **types** — all type definitions and the `global_cfg` definition.
+- **append_buffer** — initialize with `ABUF_INIT`; freeing resets it for reuse.
+- **terminal** — termios raw mode, `terminal_suspend` job-control stop and resume, escape-sequence key decoding, `die_safely`.
+- **file_buffer** — read-only private `mmap` into `global_cfg.file`. Reload replaces the mapping without copying the whole file.
+- **hex_edit** — writable reopen with file identity checks, mandatory backup before edit enable, private copy-on-write editing. `hex_edit_patch` validates and reserves an entire group of field changes before staging any bytes. Saves verify file identity/version and expected original bytes; failed saves retain pending records. Discard remaps the originally opened file. See `docs/hex-editing.md` for limits and failure semantics.
+- **file_backup** — preserves an existing independent regular backup; source changes or backup failures prevent editing. Flushes the copy and parent directory before editing begins.
+- **executable** (plus `executable_{pe,ne,linear,nlm}.c`) — bounded PE32/PE32+, NE, LE/LX and i386 NLM v4 parsers, independent of editor state. Errors disable all structured edits. Initialize `executableInfo` to zero and release its rows with `executable_free`.
+- **executable_browser** — uses the existing hex edit transaction/save/discard path; paired PE lookup/IAT changes stage together. See `docs/executable-imports.md` for format limits.
+- **editor** — `switch_mode` recomputes `cx`/`cy`/`numrows` from `cur_byte` with overflow-safe row arithmetic.
+- **input** — `editor_process_keypress` dispatches every key, including quit (`Ctrl-Q` or `Ctrl-C`) and suspend (`Ctrl-Z`).
+- **render** — per-mode row drawing, status/message bars, scrolling, `editor_refresh_screen`.
+- **binary** — bounded ELF, PE/TE, DOS MZ, thin Mach-O and i386 NLM v4 parsing. Distinguishes raw, detected, unsupported and malformed files, without heap allocation. NLM uses file offsets because its load base is not encoded.
+- **search** — `search_compile` rejects incomplete hexadecimal pairs and caps patterns at `SEARCH_PATTERN_MAX`; `search_find` scans without changing editor state. The prompt, repeat and status handling live in the same module and move `cur_byte` through `switch_mode()`.
+- **architecture** — decoder profiles, detection, manual overrides and entry navigation. Static detection metadata is valid only for the currently detected mapping; `binary_detected`, its pointer and size gate access.
+- **disassembler** — wraps Zydis/Capstone. `disassemble_block(cur_byte)` fills `global_cfg.disassembler_buffer`, centering the instruction containing `cur_byte`. A single forward decoding pass retains preceding rows in a ring, preserving Thumb IT state. Bounded lookback respects cached boundaries, known entry points, instruction alignment and mapped region ends.
 
 ### Modes and coordinates
 
-`editorMode` (`TEXT_MODE`, `HEX_MODE`, `DISASSEMBLER_MODE`) selects which `draw_row_*` runs. `switch_mode()` recomputes `cur_screencols`, `cy`, `cx`, and `numrows` from `cur_byte`. Text uses the actual terminal width; hex mode calculates how many bytes fit alongside offsets and ASCII. Disassembly drops the raw-byte column on narrow terminals and clips instruction text to fit.
+The canonical cursor state is `global_cfg.cur_byte` (an absolute byte offset
+into the mmap). `cx`/`cy` are derived from it via `cur_screencols`. When adding a
+movement or mode feature, update `cur_byte` and let `switch_mode()` re-derive the
+rest; do not maintain `cx`/`cy` independently. Initialize all new state in
+`init_editor()`.
 
-`editor_resize()` records the physical `terminal_rows` and `screencols`, reserves two rows for status/help, resizes the disassembly buffer, and reflows the cursor. Below `SCREENCOLS_MIN` columns or `SCREENROWS_MIN` total rows (24x5), `window_too_small` pauses navigation and displays a resize message. Input timeouts poll the terminal dimensions, so resizing redraws without a keypress; enlarging restores the selected byte.
-
-The canonical cursor state is `global_cfg.cur_byte` (an absolute byte offset into the mmap). `cx`/`cy` are derived from it via `cur_screencols`. When adding a movement or mode feature, update `cur_byte` and let `switch_mode()` re-derive the rest; do not maintain `cx`/`cy` independently.
-
-`disassemblerMode` (`REAL`, `MODE_LONG_COMPAT_16/32/64`) controls x86 decoding;
-`architecture` and `big_endian` select the wider CPU profile. `init_editor()`
-defaults to x86-32. File headers override those defaults; raw files retain the
-x86 fallback, while unsupported/malformed headers select `ARCH_UNKNOWN` and
-render bytes. `architecture_select()` clears cached rows without moving
-`cur_byte`; selecting Auto re-detects the header (raw resets to x86-32).
-
-Shift-F1 or `a` opens the scrollable architecture menu. `architecture_menu` and
-`architecture_choice` hold its state; Escape cancels, Enter applies. `o` cycles
-x86 modes via the same profile API. `e` jumps to the detected entry/first code
-region; entering assembly mode at offset zero also performs that jump. All new
-state is initialized in `init_editor()`. The menu uses the normal append buffer.
-
-The left gutter remains a file offset. Instruction formatting uses the mapped
-runtime address for supported containers; raw/unmapped bytes use file offsets.
-Native relative operand syntax, including RISC-V branch displacements, is retained.
-No relocations, symbols, universal-binary slices, or mixed ARM mapping symbols
-are applied. Changing a decode profile does not claim to translate file content.
+`editorMode` (`TEXT_MODE`, `HEX_MODE`, `DISASSEMBLER_MODE`) selects which
+`draw_row_*` runs; `disassemblerMode` and `architecture`/`big_endian` select the
+decode profile. Changing a decode profile does not claim to translate file
+content, and the gutter stays a file offset in every mode.
 
 Keyboard and UI feature contracts — Ctrl-Q/Ctrl-C quitting and Ctrl-Z job
 control, paging, F3 hex editing, the mandatory `<filename>.backup` precondition,
-the F8 browser, F5 goto and F7 search — live in the `lhiew-ui-features` skill
+the F8 browser, F5 goto and F7 search — plus mode/coordinate recomputation,
+resize behavior and architecture selection live in the `lhiew-ui-features` skill
 (`.claude/skills/lhiew-ui-features/SKILL.md`). Read it before changing
 `input.c`, `terminal.c`, `render.c`, `hex_edit.c`, `executable_browser.c` or
 `search.c`.

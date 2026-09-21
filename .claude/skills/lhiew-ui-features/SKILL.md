@@ -1,6 +1,6 @@
 ---
 name: lhiew-ui-features
-description: LHiew keyboard and UI feature contracts — Ctrl-Q/Ctrl-C quitting and Ctrl-Z job control, Page Up/Down paging, F3 hex editing and nibble state, the mandatory <filename>.backup precondition, F8 executable browser prompts, F5 goto, and F7/Shift-F7/n/N search. Read before changing input.c, terminal.c, render.c, hex_edit.c, executable_browser.c or search.c.
+description: LHiew keyboard and UI feature contracts — Ctrl-Q/Ctrl-C quitting and Ctrl-Z job control, mode/coordinate recomputation and resize behavior, architecture selection, Page Up/Down paging, F3 hex editing and nibble state, the mandatory <filename>.backup precondition, F8 executable browser prompts, F5 goto, and F7/Shift-F7/n/N search. Read before changing input.c, terminal.c, render.c, hex_edit.c, executable_browser.c or search.c.
 ---
 
 # LHiew keyboard and UI feature contracts
@@ -25,6 +25,42 @@ made during the stop is applied. Editing state and pending bytes survive a stop.
 Every `tcsetattr` goes through `set_terminal_mode`, which retries on `EINTR`:
 after `bg`, the background editor is stopped by `SIGTTOU` inside that call and
 the call fails once the job is continued, which must not be fatal.
+
+## Modes, coordinates and resize
+
+`editorMode` (`TEXT_MODE`, `HEX_MODE`, `DISASSEMBLER_MODE`) selects which
+`draw_row_*` runs. `switch_mode()` recomputes `cur_screencols`, `cy`, `cx`, and
+`numrows` from `cur_byte`. Text uses the actual terminal width; hex mode
+calculates how many bytes fit alongside offsets and ASCII. Disassembly drops the
+raw-byte column on narrow terminals and clips instruction text to fit.
+
+`editor_resize()` records the physical `terminal_rows` and `screencols`, reserves
+two rows for status/help, resizes the disassembly buffer, and reflows the cursor.
+Below `SCREENCOLS_MIN` columns or `SCREENROWS_MIN` total rows (24x5),
+`window_too_small` pauses navigation and displays a resize message. Input
+timeouts poll the terminal dimensions, so resizing redraws without a keypress;
+enlarging restores the selected byte.
+
+## Architecture selection (Shift-F1, a, o, e)
+
+`disassemblerMode` (`REAL`, `MODE_LONG_COMPAT_16/32/64`) controls x86 decoding;
+`architecture` and `big_endian` select the wider CPU profile. `init_editor()`
+defaults to x86-32. File headers override those defaults; raw files retain the
+x86 fallback, while unsupported/malformed headers select `ARCH_UNKNOWN` and
+render bytes. `architecture_select()` clears cached rows without moving
+`cur_byte`; selecting Auto re-detects the header (raw resets to x86-32).
+
+Shift-F1 or `a` opens the scrollable architecture menu. `architecture_menu` and
+`architecture_choice` hold its state; Escape cancels, Enter applies. `o` cycles
+x86 modes via the same profile API. `e` jumps to the detected entry/first code
+region; entering assembly mode at offset zero also performs that jump. The menu
+uses the normal append buffer.
+
+The left gutter remains a file offset. Instruction formatting uses the mapped
+runtime address for supported containers; raw/unmapped bytes use file offsets.
+Native relative operand syntax, including RISC-V branch displacements, is
+retained. No relocations, symbols, universal-binary slices, or mixed ARM mapping
+symbols are applied.
 
 ## Paging
 
